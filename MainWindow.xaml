@@ -1,0 +1,890 @@
+<Window x:Class="GRBL_Cam.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d"
+        Title="GRBL Cam"
+        Width="1680"
+        Height="980"
+        MinWidth="1320"
+        MinHeight="820"
+        Background="#F7F4EC"
+        FontFamily="Bahnschrift">
+    <Window.Resources>
+        <Style x:Key="CardStyle" TargetType="Border">
+            <Setter Property="Background" Value="#FFFCF7" />
+            <Setter Property="CornerRadius" Value="16" />
+            <Setter Property="Padding" Value="16" />
+            <Setter Property="Margin" Value="0,0,0,12" />
+            <Setter Property="BorderBrush" Value="#E0D9CB" />
+            <Setter Property="BorderThickness" Value="1" />
+        </Style>
+        <Style TargetType="Button">
+            <Setter Property="Padding" Value="14,8" />
+            <Setter Property="Margin" Value="0,0,8,0" />
+            <Setter Property="Background" Value="#173F3A" />
+            <Setter Property="Foreground" Value="White" />
+            <Setter Property="BorderBrush" Value="#173F3A" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+        </Style>
+        <Style TargetType="GroupBox">
+            <Setter Property="Margin" Value="0,0,0,12" />
+            <Setter Property="Padding" Value="10" />
+            <Setter Property="BorderBrush" Value="#D8D2C4" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Background" Value="#FFFDF9" />
+        </Style>
+        <Style x:Key="SectionTitleStyle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="22" />
+            <Setter Property="FontWeight" Value="Bold" />
+            <Setter Property="Foreground" Value="#243239" />
+        </Style>
+        <Style x:Key="MutedTextStyle" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="#5B6770" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+        </Style>
+        <Style TargetType="TextBox">
+            <EventSetter Event="TextChanged" Handler="PreviewEditingControl_Changed" />
+            <EventSetter Event="LostFocus" Handler="PreviewEditingControl_LostFocus" />
+        </Style>
+        <Style TargetType="ComboBox">
+            <EventSetter Event="SelectionChanged" Handler="PreviewEditingControl_Changed" />
+        </Style>
+        <Style TargetType="CheckBox">
+            <EventSetter Event="Checked" Handler="PreviewEditingControl_Changed" />
+            <EventSetter Event="Unchecked" Handler="PreviewEditingControl_Changed" />
+        </Style>
+    </Window.Resources>
+
+    <Grid Margin="18">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <Border Grid.Row="0" Style="{StaticResource CardStyle}" Background="#EFE8DA">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+
+                <StackPanel>
+                    <TextBlock Style="{StaticResource SectionTitleStyle}" Text="GRBL Cam" />
+                    <TextBlock Margin="0,6,0,0"
+                               Style="{StaticResource MutedTextStyle}"
+                               Text="The 3D viewport is the main workspace for model preview, feature selection, and toolpath review. Orbit with right-drag, zoom with the mouse wheel, left-click faces for point, bulk, raster, adaptive, Z-level, 3D parallel, scallop, and pencil lower-limit planes, circular edges for drill/boring centers, and model edges for profile/2D contour/chamfer/pencil operations." />
+                </StackPanel>
+
+                <StackPanel Grid.Column="1"
+                            Orientation="Horizontal"
+                            VerticalAlignment="Center">
+                    <Button Content="Import Model"
+                            Click="ImportStepButton_Click" />
+                    <Button Content="Import Stock Solid"
+                            Click="ImportStockButton_Click" />
+                    <Button Content="Tool Library"
+                            Click="OpenToolLibraryButton_Click" />
+                    <Button Content="Refresh 3D Preview"
+                            Click="RefreshPreviewButton_Click" />
+                    <Button Content="Reset View"
+                            Click="ResetViewButton_Click" />
+                    <Button Content="Save Workspace"
+                            Command="{Binding SaveStateCommand}" />
+                    <Button Content="Generate Toolpaths"
+                            Command="{Binding GenerateProgramCommand}" />
+                    <Button Content="Export G-code"
+                            Click="ExportGCodeButton_Click" />
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <Grid Grid.Row="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="430" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="360" />
+            </Grid.ColumnDefinitions>
+
+            <Border Grid.Column="0" Style="{StaticResource CardStyle}" Margin="0,0,14,0">
+                <TabControl Background="#FFF8EF">
+                    <TabItem Header="Machine">
+                        <Grid Margin="12">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="*" />
+                            </Grid.RowDefinitions>
+
+                            <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
+                                <Button Content="Add" Command="{Binding AddMachineProfileCommand}" />
+                                <Button Content="Remove" Command="{Binding RemoveMachineProfileCommand}" />
+                                <Button Content="Configure A/B Rotary" Command="{Binding ConfigureIndexedFourthAxisCommand}" />
+                            </StackPanel>
+
+                            <Grid Grid.Row="1">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="170" />
+                                    <RowDefinition Height="*" />
+                                </Grid.RowDefinitions>
+
+                                <ListBox ItemsSource="{Binding MachineProfiles}"
+                                         SelectedItem="{Binding SelectedMachineProfile}"
+                                         DisplayMemberPath="Name"
+                                         BorderThickness="0"
+                                         Background="Transparent" />
+
+                                <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+                                    <StackPanel Margin="0,12,0,0">
+                                        <GroupBox Header="Active Profile">
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="132" />
+                                                    <ColumnDefinition Width="*" />
+                                                </Grid.ColumnDefinitions>
+                                                <Grid.RowDefinitions>
+                                                    <RowDefinition Height="Auto" />
+                                                    <RowDefinition Height="Auto" />
+                                                    <RowDefinition Height="Auto" />
+                                                    <RowDefinition Height="Auto" />
+                                                    <RowDefinition Height="Auto" />
+                                                    <RowDefinition Height="Auto" />
+                                                    <RowDefinition Height="Auto" />
+                                                </Grid.RowDefinitions>
+
+                                                <TextBlock Grid.Row="0" Grid.Column="0" Margin="0,0,8,8" Text="Name" />
+                                                <TextBox Grid.Row="0" Grid.Column="1" Margin="0,0,0,8" Text="{Binding SelectedMachineProfile.Name, UpdateSourceTrigger=PropertyChanged}" />
+                                                <TextBlock Grid.Row="1" Grid.Column="0" Margin="0,0,8,8" Text="Family" />
+                                                <ComboBox Grid.Row="1" Grid.Column="1" Margin="0,0,0,8" ItemsSource="{Binding MachineFamilies}" SelectedItem="{Binding SelectedMachineProfile.Family}" />
+                                                <TextBlock Grid.Row="2" Grid.Column="0" Margin="0,0,8,8" Text="Kinematics" />
+                                                <ComboBox Grid.Row="2" Grid.Column="1" Margin="0,0,0,8" ItemsSource="{Binding KinematicsModes}" SelectedItem="{Binding SelectedMachineProfile.Kinematics}" />
+                                                <TextBlock Grid.Row="3" Grid.Column="0" Margin="0,0,8,8" Text="Controller" />
+                                                <TextBox Grid.Row="3" Grid.Column="1" Margin="0,0,0,8" Text="{Binding SelectedMachineProfile.Controller, UpdateSourceTrigger=PropertyChanged}" />
+                                                <TextBlock Grid.Row="4" Grid.Column="0" Margin="0,0,8,8" Text="Spindle Range" />
+                                                <StackPanel Grid.Row="4" Grid.Column="1" Orientation="Horizontal" Margin="0,0,0,8">
+                                                    <TextBox Width="84" Margin="0,0,8,0" Text="{Binding SelectedMachineProfile.SpindleMinRpm, UpdateSourceTrigger=PropertyChanged}" />
+                                                    <TextBox Width="84" Text="{Binding SelectedMachineProfile.SpindleMaxRpm, UpdateSourceTrigger=PropertyChanged}" />
+                                                </StackPanel>
+                                                <TextBlock Grid.Row="5" Grid.Column="0" Margin="0,0,8,8" Text="Max Rapid" />
+                                                <TextBox Grid.Row="5" Grid.Column="1" Margin="0,0,0,8" Text="{Binding SelectedMachineProfile.MaxRapidRate, UpdateSourceTrigger=PropertyChanged}" />
+                                                <CheckBox Grid.Row="6" Grid.Column="0" Grid.ColumnSpan="2" Margin="0,4,0,0" Content="Automatic tool changer" IsChecked="{Binding SelectedMachineProfile.SupportsAutomaticToolChange}" />
+                                            </Grid>
+                                        </GroupBox>
+
+                                        <GroupBox Header="Axes">
+                                            <StackPanel>
+                                                <TextBlock Margin="0,0,0,6"
+                                                           Style="{StaticResource MutedTextStyle}"
+                                                           Text="Use A/B rotary axes only. Set Around to X or Y to match the machine, including swapped A/Y and B/X layouts." />
+                                                <DataGrid AutoGenerateColumns="False"
+                                                          CanUserAddRows="True"
+                                                          ItemsSource="{Binding SelectedMachineProfile.Axes}"
+                                                          HeadersVisibility="Column"
+                                                          MinHeight="170">
+                                                    <DataGrid.Columns>
+                                                        <DataGridTextColumn Header="Axis" Binding="{Binding Name}" Width="*" />
+                                                        <DataGridComboBoxColumn Header="Type" SelectedItemBinding="{Binding Type}" Width="90" ItemsSource="{Binding DataContext.AxisTypes, RelativeSource={RelativeSource AncestorType=Window}}" />
+                                                        <DataGridComboBoxColumn Header="Around" SelectedItemBinding="{Binding RotatesAround}" Width="82" ItemsSource="{Binding DataContext.RotaryAxisDirections, RelativeSource={RelativeSource AncestorType=Window}}" />
+                                                        <DataGridTextColumn Header="Min" Binding="{Binding TravelMin}" Width="62" />
+                                                        <DataGridTextColumn Header="Max" Binding="{Binding TravelMax}" Width="62" />
+                                                        <DataGridTextColumn Header="Feed" Binding="{Binding MaxFeedRate}" Width="72" />
+                                                        <DataGridTextColumn Header="Home" Binding="{Binding HomePosition}" Width="72" />
+                                                    </DataGrid.Columns>
+                                                </DataGrid>
+                                            </StackPanel>
+                                        </GroupBox>
+
+                                        <GroupBox Header="Home Point">
+                                            <UniformGrid Columns="3">
+                                                <StackPanel Margin="0,0,8,0">
+                                                    <TextBlock Text="X" />
+                                                    <TextBox Text="{Binding SelectedMachineProfile.HomePoint.X, UpdateSourceTrigger=PropertyChanged}" />
+                                                </StackPanel>
+                                                <StackPanel Margin="0,0,8,0">
+                                                    <TextBlock Text="Y" />
+                                                    <TextBox Text="{Binding SelectedMachineProfile.HomePoint.Y, UpdateSourceTrigger=PropertyChanged}" />
+                                                </StackPanel>
+                                                <StackPanel>
+                                                    <TextBlock Text="Z" />
+                                                    <TextBox Text="{Binding SelectedMachineProfile.HomePoint.Z, UpdateSourceTrigger=PropertyChanged}" />
+                                                </StackPanel>
+                                            </UniformGrid>
+                                        </GroupBox>
+                                    </StackPanel>
+                                </ScrollViewer>
+                            </Grid>
+                        </Grid>
+                    </TabItem>
+
+                    <TabItem Header="Tools">
+                        <Grid Margin="12">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="*" />
+                            </Grid.RowDefinitions>
+
+                            <StackPanel>
+                                <TextBlock FontSize="18"
+                                           FontWeight="Bold"
+                                           Foreground="#243239"
+                                           Text="Tool Setup" />
+                                <TextBlock Margin="0,8,0,14"
+                                           Style="{StaticResource MutedTextStyle}"
+                                           Text="Tool setup now opens in a dedicated window with a full editor and 3D preview. The operation table still uses the selected tool numbers from this library." />
+                                <Button Width="190"
+                                        HorizontalAlignment="Left"
+                                        Content="Open Tool Library"
+                                        Click="OpenToolLibraryButton_Click" />
+                            </StackPanel>
+
+                            <DataGrid Grid.Row="1"
+                                      Margin="0,16,0,0"
+                                      AutoGenerateColumns="False"
+                                      ItemsSource="{Binding ToolLibrary}"
+                                      SelectedItem="{Binding SelectedTool}"
+                                      IsReadOnly="True"
+                                      CanUserAddRows="False">
+                                <DataGrid.Columns>
+                                    <DataGridTextColumn Header="T#" Binding="{Binding Number}" Width="58" />
+                                    <DataGridTextColumn Header="Name" Binding="{Binding Name}" Width="*" />
+                                    <DataGridTextColumn Header="Style" Binding="{Binding Style}" Width="120" />
+                                    <DataGridTextColumn Header="Dia" Binding="{Binding CuttingDiameter}" Width="58" />
+                                    <DataGridTextColumn Header="Flutes" Binding="{Binding FluteCount}" Width="64" />
+                                    <DataGridTextColumn Header="Flute Len" Binding="{Binding FluteLength}" Width="78" />
+                                </DataGrid.Columns>
+                            </DataGrid>
+                        </Grid>
+                    </TabItem>
+
+                    <TabItem Header="Setup">
+                        <ScrollViewer Margin="12" VerticalScrollBarVisibility="Auto">
+                            <StackPanel>
+                                <GroupBox Header="Setups">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="120" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                        </Grid.RowDefinitions>
+
+                                        <TextBlock Grid.Row="0" Grid.Column="0" Margin="0,0,8,8" Text="Active Setup" />
+                                        <ComboBox Grid.Row="0"
+                                                  Grid.Column="1"
+                                                  Margin="0,0,0,8"
+                                                  ItemsSource="{Binding Setups}"
+                                                  SelectedItem="{Binding SelectedSetup}"
+                                                  DisplayMemberPath="Name" />
+                                        <TextBlock Grid.Row="1" Grid.Column="0" Margin="0,0,8,8" Text="Name" />
+                                        <TextBox Grid.Row="1" Grid.Column="1" Margin="0,0,0,8" Text="{Binding CurrentSetup.Name, UpdateSourceTrigger=PropertyChanged}" />
+                                        <CheckBox Grid.Row="2"
+                                                  Grid.Column="1"
+                                                  Margin="0,0,0,8"
+                                                  Content="Carry REST material state from previous setup"
+                                                  IsChecked="{Binding CurrentSetup.TransferRestFromPreviousSetup}" />
+                                        <StackPanel Grid.Row="3" Grid.Column="1" Orientation="Horizontal">
+                                            <Button Content="Add Setup" Command="{Binding AddSetupCommand}" />
+                                            <Button Content="Remove Setup" Command="{Binding RemoveSetupCommand}" />
+                                        </StackPanel>
+                                    </Grid>
+                                </GroupBox>
+
+                                <GroupBox Header="Origin / Axis Direction">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="120" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                        </Grid.RowDefinitions>
+
+                                        <TextBlock Grid.Row="0" Grid.Column="0" Margin="0,0,8,8" Text="Source / Point" />
+                                        <StackPanel Grid.Row="0" Grid.Column="1" Orientation="Horizontal" Margin="0,0,0,8">
+                                            <ComboBox Width="92"
+                                                      Margin="0,0,8,0"
+                                                      ItemsSource="{Binding SetupOriginSources}"
+                                                      SelectedItem="{Binding CurrentSetup.OriginSource}" />
+                                            <ComboBox Width="166"
+                                                      ItemsSource="{Binding SetupOriginAnchors}"
+                                                      SelectedItem="{Binding CurrentSetup.OriginAnchor}" />
+                                        </StackPanel>
+                                        <TextBlock Grid.Row="1" Grid.Column="0" Margin="0,0,8,8" Text="Origin X / Y / Z" />
+                                        <StackPanel Grid.Row="1" Grid.Column="1" Orientation="Horizontal" Margin="0,0,0,8">
+                                            <TextBox Width="74" Margin="0,0,8,0" Text="{Binding CurrentSetup.WorkOrigin.X, UpdateSourceTrigger=PropertyChanged}" />
+                                            <TextBox Width="74" Margin="0,0,8,0" Text="{Binding CurrentSetup.WorkOrigin.Y, UpdateSourceTrigger=PropertyChanged}" />
+                                            <TextBox Width="74" Text="{Binding CurrentSetup.WorkOrigin.Z, UpdateSourceTrigger=PropertyChanged}" />
+                                        </StackPanel>
+                                        <TextBlock Grid.Row="2" Grid.Column="0" Margin="0,0,8,8" Text="Axis Flip" />
+                                        <WrapPanel Grid.Row="2" Grid.Column="1" Margin="0,0,0,8">
+                                            <CheckBox Margin="0,0,12,0" Content="Flip X" IsChecked="{Binding CurrentSetup.FlipAxisX}" />
+                                            <CheckBox Margin="0,0,12,0" Content="Flip Y" IsChecked="{Binding CurrentSetup.FlipAxisY}" />
+                                            <CheckBox Content="Flip Z" IsChecked="{Binding CurrentSetup.FlipAxisZ}" />
+                                        </WrapPanel>
+                                        <StackPanel Grid.Row="3" Grid.Column="1" Orientation="Horizontal">
+                                            <Button Content="Apply Origin Preset" Command="{Binding ApplySetupOriginCommand}" />
+                                            <Button Content="Pick Origin In 3D" Command="{Binding PickSetupOriginCommand}" />
+                                            <TextBlock VerticalAlignment="Center"
+                                                       Style="{StaticResource MutedTextStyle}"
+                                                       Text="The colored triad shows the active setup origin and flipped axis directions." />
+                                        </StackPanel>
+                                    </Grid>
+                                </GroupBox>
+
+                                <GroupBox Header="Job">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="120" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                        </Grid.RowDefinitions>
+
+                                        <TextBlock Grid.Row="0" Grid.Column="0" Margin="0,0,8,8" Text="Job Name" />
+                                        <TextBox Grid.Row="0" Grid.Column="1" Margin="0,0,0,8" Text="{Binding CurrentJob.Name, UpdateSourceTrigger=PropertyChanged}" />
+                                        <TextBlock Grid.Row="1" Grid.Column="0" Margin="0,0,8,8" Text="Units" />
+                                        <ComboBox Grid.Row="1" Grid.Column="1" Margin="0,0,0,8" ItemsSource="{Binding UnitModes}" SelectedItem="{Binding CurrentJob.Units}" />
+                                        <TextBlock Grid.Row="2" Grid.Column="0" Margin="0,0,8,0" Text="WCS" />
+                                        <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding CurrentSetup.WorkOffsetCode, UpdateSourceTrigger=PropertyChanged}" />
+                                    </Grid>
+                                </GroupBox>
+
+                                <GroupBox Header="Part / Model">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="120" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                        </Grid.RowDefinitions>
+
+                                        <TextBlock Grid.Row="0" Grid.Column="0" Margin="0,0,8,8" Text="Source" />
+                                        <ComboBox Grid.Row="0" Grid.Column="1" Margin="0,0,0,8" ItemsSource="{Binding PartSourceTypes}" SelectedItem="{Binding CurrentSetup.Part.SourceType}" />
+                                        <TextBlock Grid.Row="1" Grid.Column="0" Margin="0,0,8,8" Text="Path" />
+                                        <TextBox Grid.Row="1" Grid.Column="1" Margin="0,0,0,8" Text="{Binding CurrentSetup.Part.SourcePath, UpdateSourceTrigger=PropertyChanged}" />
+                                        <TextBlock Grid.Row="2" Grid.Column="0" Margin="0,0,8,8" Text="Rotation A / B" />
+                                        <StackPanel Grid.Row="2" Grid.Column="1" Orientation="Horizontal" Margin="0,0,0,8">
+                                            <TextBox Width="74" Margin="0,0,8,0" Text="{Binding CurrentSetup.Part.RotationA, UpdateSourceTrigger=PropertyChanged}" />
+                                            <TextBox Width="74" Text="{Binding CurrentSetup.Part.RotationB, UpdateSourceTrigger=PropertyChanged}" />
+                                        </StackPanel>
+                                        <TextBlock Grid.Row="3" Grid.Column="0" Margin="0,0,8,0" Text="Primitive Size" />
+                                        <StackPanel Grid.Row="3" Grid.Column="1" Orientation="Horizontal">
+                                            <TextBox Width="74" Margin="0,0,8,0" Text="{Binding CurrentSetup.Part.LengthX, UpdateSourceTrigger=PropertyChanged}" />
+                                            <TextBox Width="74" Margin="0,0,8,0" Text="{Binding CurrentSetup.Part.WidthY, UpdateSourceTrigger=PropertyChanged}" />
+                                            <TextBox Width="74" Margin="0,0,8,0" Text="{Binding CurrentSetup.Part.HeightZ, UpdateSourceTrigger=PropertyChanged}" />
+                                            <TextBox Width="74" Text="{Binding CurrentSetup.Part.Diameter, UpdateSourceTrigger=PropertyChanged}" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Row="4" Grid.Column="1" Orientation="Horizontal" Margin="0,10,0,0">
+                                            <Button Content="Apply to 3D View" Click="RefreshPreviewButton_Click" />
+                                            <TextBlock VerticalAlignment="Center"
+                                                       Style="{StaticResource MutedTextStyle}"
+                                                       Text="Imported models use native size. Rotation is applied before stock/WCS and posts as indexed A/B when the machine supports it." />
+                                        </StackPanel>
+                                    </Grid>
+                                </GroupBox>
+
+                                <GroupBox Header="Stock">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="120" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                        </Grid.RowDefinitions>
+
+                                        <TextBlock Grid.Row="0" Grid.Column="0" Margin="0,0,8,8" Text="Shape" />
+                                        <ComboBox Grid.Row="0" Grid.Column="1" Margin="0,0,0,8" ItemsSource="{Binding StockShapes}" SelectedItem="{Binding CurrentSetup.Stock.Shape}" />
+                                        <TextBlock Grid.Row="1" Grid.Column="0" Margin="0,0,8,8" Text="Imported" />
+                                        <TextBox Grid.Row="1" Grid.Column="1" Margin="0,0,0,8" Text="{Binding CurrentSetup.Stock.ImportedSolidPath, UpdateSourceTrigger=PropertyChanged}" />
+                                        <TextBlock Grid.Row="2" Grid.Column="0" Margin="0,0,8,8" Text="Length / Width / Height" />
+                                        <StackPanel Grid.Row="2" Grid.Column="1" Orientation="Horizontal">
+                                            <TextBox Width="62" Margin="0,0,6,0" Text="{Binding CurrentSetup.Stock.LengthX, UpdateSourceTrigger=PropertyChanged}" />
+                                            <TextBox Width="62" Margin="0,0,6,0" Text="{Binding CurrentSetup.Stock.WidthY, UpdateSourceTrigger=PropertyChanged}" />
+                                            <TextBox Width="62" Text="{Binding CurrentSetup.Stock.HeightZ, UpdateSourceTrigger=PropertyChanged}" />
+                                        </StackPanel>
+                                        <TextBlock Grid.Row="3" Grid.Column="0" Margin="0,0,8,0" Text="Radial / Axial / Dia" />
+                                        <StackPanel Grid.Row="3" Grid.Column="1" Orientation="Horizontal">
+                                            <TextBox Width="62" Margin="0,0,6,0" Text="{Binding CurrentSetup.Stock.RadialAllowance, UpdateSourceTrigger=PropertyChanged}" />
+                                            <TextBox Width="62" Margin="0,0,6,0" Text="{Binding CurrentSetup.Stock.AxialAllowance, UpdateSourceTrigger=PropertyChanged}" />
+                                            <TextBox Width="62" Text="{Binding CurrentSetup.Stock.Diameter, UpdateSourceTrigger=PropertyChanged}" />
+                                        </StackPanel>
+                                        <TextBlock Grid.Row="4" Grid.Column="0" Margin="0,10,8,0" Text="Stock Offset X / Y / Z" />
+                                        <StackPanel Grid.Row="4" Grid.Column="1" Orientation="Horizontal" Margin="0,10,0,0">
+                                            <TextBox Width="62" Margin="0,0,6,0" Text="{Binding CurrentSetup.Stock.OffsetX, UpdateSourceTrigger=PropertyChanged}" />
+                                            <TextBox Width="62" Margin="0,0,6,0" Text="{Binding CurrentSetup.Stock.OffsetY, UpdateSourceTrigger=PropertyChanged}" />
+                                            <TextBox Width="62" Text="{Binding CurrentSetup.Stock.OffsetZ, UpdateSourceTrigger=PropertyChanged}" />
+                                        </StackPanel>
+                                        <TextBlock Grid.Row="5" Grid.Column="0" Margin="0,10,8,0" Text="Stock Rot A / B" />
+                                        <StackPanel Grid.Row="5" Grid.Column="1" Orientation="Horizontal" Margin="0,10,0,0">
+                                            <TextBox Width="62" Margin="0,0,6,0" Text="{Binding CurrentSetup.Stock.RotationA, UpdateSourceTrigger=PropertyChanged}" />
+                                            <TextBox Width="62" Text="{Binding CurrentSetup.Stock.RotationB, UpdateSourceTrigger=PropertyChanged}" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Row="6" Grid.Column="1" Orientation="Horizontal" Margin="0,10,0,0">
+                                            <Button Content="Apply Stock to 3D View" Click="RefreshPreviewButton_Click" />
+                                            <TextBlock VerticalAlignment="Center"
+                                                       Style="{StaticResource MutedTextStyle}"
+                                                       Text="Cylinder: Dia controls diameter; Height controls blank length. Use the machine A/B Around settings to choose X/Y rotary alignment." />
+                                        </StackPanel>
+                                        <CheckBox Grid.Row="7"
+                                                  Grid.Column="1"
+                                                  Margin="0,10,0,0"
+                                                  IsChecked="{Binding CurrentSetup.Stock.ShowInPreview}"
+                                                  Content="Show Stock In 3D Preview" />
+                                    </Grid>
+                                </GroupBox>
+
+                                <GroupBox Header="Alignment / Work Axes">
+                                    <StackPanel>
+                                        <TextBlock Margin="0,0,0,6" Text="Alignment Offset X / Y / Z" />
+                                        <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                                            <TextBox Width="74" Margin="0,0,8,0" Text="{Binding CurrentSetup.AlignmentOffsetX, UpdateSourceTrigger=PropertyChanged}" />
+                                            <TextBox Width="74" Margin="0,0,8,0" Text="{Binding CurrentSetup.AlignmentOffsetY, UpdateSourceTrigger=PropertyChanged}" />
+                                            <TextBox Width="74" Text="{Binding CurrentSetup.AlignmentOffsetZ, UpdateSourceTrigger=PropertyChanged}" />
+                                        </StackPanel>
+                                        <TextBlock Margin="0,0,0,6" Text="Setup Placement X / Y / Z" />
+                                        <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                                            <TextBox Width="74" Margin="0,0,8,0" Text="{Binding CurrentSetup.WorkOffset.X, UpdateSourceTrigger=PropertyChanged}" />
+                                            <TextBox Width="74" Margin="0,0,8,0" Text="{Binding CurrentSetup.WorkOffset.Y, UpdateSourceTrigger=PropertyChanged}" />
+                                            <TextBox Width="74" Text="{Binding CurrentSetup.WorkOffset.Z, UpdateSourceTrigger=PropertyChanged}" />
+                                        </StackPanel>
+                                        <TextBlock Margin="0,0,0,6" Text="Safe Z / Clearance Z" />
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBox Width="74" Margin="0,0,8,0" Text="{Binding CurrentSetup.SafeZ, UpdateSourceTrigger=PropertyChanged}" />
+                                            <TextBox Width="74" Text="{Binding CurrentSetup.ClearanceZ, UpdateSourceTrigger=PropertyChanged}" />
+                                        </StackPanel>
+                                    </StackPanel>
+                                </GroupBox>
+                            </StackPanel>
+                        </ScrollViewer>
+                    </TabItem>
+
+                    <TabItem Header="Operations">
+                        <Grid Margin="12">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="124" />
+                                <RowDefinition Height="*" />
+                            </Grid.RowDefinitions>
+
+                            <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
+                                <Button Content="Add" Command="{Binding AddOperationCommand}" />
+                                <Button Content="Remove" Command="{Binding RemoveOperationCommand}" />
+                            </StackPanel>
+
+                            <ListBox Grid.Row="1"
+                                     ItemsSource="{Binding ActiveOperations}"
+                                     SelectedItem="{Binding SelectedOperation}"
+                                     BorderThickness="0"
+                                     Background="Transparent">
+                                <ListBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <Border Padding="10" Margin="0,0,0,8" CornerRadius="10" Background="#F4EEE0">
+                                            <StackPanel>
+                                                <TextBlock FontWeight="SemiBold" Text="{Binding Name}" />
+                                                <TextBlock Foreground="#5B6770" Text="{Binding Type}" />
+                                                <TextBlock Foreground="#5B6770" Text="{Binding Feature.Name}" />
+                                            </StackPanel>
+                                        </Border>
+                                    </DataTemplate>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
+
+                            <ScrollViewer Grid.Row="2"
+                                          VerticalScrollBarVisibility="Auto"
+                                          HorizontalScrollBarVisibility="Disabled"
+                                          Padding="0,0,6,0">
+                                <StackPanel Margin="0,12,0,0">
+                                    <GroupBox Header="Operation Settings">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="102" />
+                                                <ColumnDefinition Width="*" />
+                                            </Grid.ColumnDefinitions>
+                                            <Grid.RowDefinitions>
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="Auto" />
+                                            </Grid.RowDefinitions>
+
+                                            <TextBlock Grid.Row="0" Grid.Column="0" Margin="0,0,8,8" Text="Name" />
+                                            <TextBox Grid.Row="0" Grid.Column="1" Margin="0,0,0,8" Text="{Binding SelectedOperation.Name, UpdateSourceTrigger=PropertyChanged}" />
+                                            <TextBlock Grid.Row="1" Grid.Column="0" Margin="0,0,8,8" Text="Type" />
+                                            <ComboBox Grid.Row="1" Grid.Column="1" Margin="0,0,0,8" ItemsSource="{Binding OperationTypes}" SelectedItem="{Binding SelectedOperation.Type}" />
+                                            <TextBlock Grid.Row="2" Grid.Column="0" Margin="0,0,8,8" Text="Tool / RPM" />
+                                            <StackPanel Grid.Row="2" Grid.Column="1" Orientation="Horizontal" Margin="0,0,0,8">
+                                                <TextBox Width="76" Margin="0,0,8,0" Text="{Binding SelectedOperation.ToolNumber, UpdateSourceTrigger=PropertyChanged}" />
+                                                <TextBox Width="104" Text="{Binding SelectedOperation.SpindleSpeed, UpdateSourceTrigger=PropertyChanged}" />
+                                            </StackPanel>
+                                            <TextBlock Grid.Row="3" Grid.Column="0" Margin="0,0,8,8" Text="Feed / Plunge" />
+                                            <StackPanel Grid.Row="3" Grid.Column="1" Orientation="Horizontal" Margin="0,0,0,8">
+                                                <TextBox Width="104" Margin="0,0,8,0" Text="{Binding SelectedOperation.FeedRate, UpdateSourceTrigger=PropertyChanged}" />
+                                                <TextBox Width="104" Text="{Binding SelectedOperation.PlungeRate, UpdateSourceTrigger=PropertyChanged}" />
+                                            </StackPanel>
+                                            <TextBlock Grid.Row="4" Grid.Column="0" Margin="0,0,8,8" Text="StepDn / StepOv" Visibility="{Binding OperationStepSettingsVisibility}" />
+                                            <StackPanel Grid.Row="4" Grid.Column="1" Orientation="Horizontal" Margin="0,0,0,8" Visibility="{Binding OperationStepSettingsVisibility}">
+                                                <TextBox Width="104" Margin="0,0,8,0" Text="{Binding SelectedOperation.StepDown, UpdateSourceTrigger=LostFocus}" />
+                                                <TextBox Width="104" Text="{Binding SelectedOperation.StepOver, UpdateSourceTrigger=LostFocus}" />
+                                            </StackPanel>
+                                            <TextBlock Grid.Row="5" Grid.Column="0" Margin="0,0,8,8" Text="Paths / Safe Z" />
+                                            <StackPanel Grid.Row="5" Grid.Column="1" Orientation="Horizontal" Margin="0,0,0,8">
+                                                <TextBox Width="104" Margin="0,0,8,0" Text="{Binding SelectedOperation.PathCount, UpdateSourceTrigger=PropertyChanged}" />
+                                                <TextBox Width="104" Text="{Binding SelectedOperation.SafeRetractZ, UpdateSourceTrigger=PropertyChanged}" />
+                                            </StackPanel>
+                                            <TextBlock Grid.Row="6" Grid.Column="0" Margin="0,0,8,8" Text="Leave R / Z" Visibility="{Binding FinishStockSettingsVisibility}" />
+                                            <StackPanel Grid.Row="6" Grid.Column="1" Orientation="Horizontal" Margin="0,0,0,8" Visibility="{Binding FinishStockSettingsVisibility}">
+                                                <TextBox Width="104" Margin="0,0,8,0" Text="{Binding SelectedOperation.FinishStockRadial, UpdateSourceTrigger=PropertyChanged}" />
+                                                <TextBox Width="104" Text="{Binding SelectedOperation.FinishStockAxial, UpdateSourceTrigger=PropertyChanged}" />
+                                            </StackPanel>
+                                            <TextBlock Grid.Row="7" Grid.Column="0" Margin="0,0,8,8" Text="Lead In / Out" Visibility="{Binding LeadSettingsVisibility}" />
+                                            <StackPanel Grid.Row="7" Grid.Column="1" Orientation="Horizontal" Margin="0,0,0,8" Visibility="{Binding LeadSettingsVisibility}">
+                                                <TextBox Width="104" Margin="0,0,8,0" Text="{Binding SelectedOperation.LeadInLength, UpdateSourceTrigger=LostFocus}" />
+                                                <TextBox Width="104" Text="{Binding SelectedOperation.LeadOutLength, UpdateSourceTrigger=LostFocus}" />
+                                            </StackPanel>
+                                            <TextBlock Grid.Row="8" Grid.Column="0" Margin="0,0,8,8" Text="Tab W / H" Visibility="{Binding TabSettingsVisibility}" />
+                                            <StackPanel Grid.Row="8" Grid.Column="1" Orientation="Horizontal" Margin="0,0,0,8" Visibility="{Binding TabSettingsVisibility}">
+                                                <TextBox Width="104" Margin="0,0,8,0" Text="{Binding SelectedOperation.TabWidth, UpdateSourceTrigger=LostFocus}" />
+                                                <TextBox Width="104" Text="{Binding SelectedOperation.TabHeight, UpdateSourceTrigger=LostFocus}" />
+                                            </StackPanel>
+                                            <TextBlock Grid.Row="9" Grid.Column="0" Margin="0,0,8,8" Text="Index A / B" Visibility="{Binding IndexedRotarySettingsVisibility}" />
+                                            <StackPanel Grid.Row="9" Grid.Column="1" Orientation="Horizontal" Margin="0,0,0,8" Visibility="{Binding IndexedRotarySettingsVisibility}">
+                                                <TextBox Width="62" Margin="0,0,6,0" Text="{Binding SelectedOperation.RotaryIndexA, UpdateSourceTrigger=PropertyChanged}" />
+                                                <TextBox Width="62" Text="{Binding SelectedOperation.RotaryIndexB, UpdateSourceTrigger=PropertyChanged}" />
+                                            </StackPanel>
+                                            <WrapPanel Grid.Row="10" Grid.Column="0" Grid.ColumnSpan="2">
+                                                <CheckBox Margin="0,0,12,0" Content="Enabled" IsChecked="{Binding SelectedOperation.Enabled}" />
+                                                <CheckBox Margin="0,0,12,0" Content="Climb" IsChecked="{Binding SelectedOperation.ClimbMilling}" Visibility="{Binding ClimbToggleVisibility}" />
+                                                <CheckBox Content="REST" IsChecked="{Binding SelectedOperation.UseRestMachining}" Visibility="{Binding RestToggleVisibility}" />
+                                            </WrapPanel>
+                                        </Grid>
+                                    </GroupBox>
+
+                                    <GroupBox Header="Feature Envelope">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="102" />
+                                                <ColumnDefinition Width="*" />
+                                            </Grid.ColumnDefinitions>
+                                            <Grid.RowDefinitions>
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="Auto" />
+                                            </Grid.RowDefinitions>
+
+                                            <TextBlock Grid.Row="0" Grid.Column="0" Margin="0,0,8,8" Text="Name" />
+                                            <TextBox Grid.Row="0" Grid.Column="1" Margin="0,0,0,8" Text="{Binding SelectedOperation.Feature.Name, UpdateSourceTrigger=PropertyChanged}" />
+                                            <TextBlock Grid.Row="1" Grid.Column="0" Margin="0,0,8,8" Text="Shape" />
+                                            <ComboBox Grid.Row="1" Grid.Column="1" Margin="0,0,0,8" ItemsSource="{Binding FeatureShapes}" SelectedItem="{Binding SelectedOperation.Feature.Shape}" />
+                                            <TextBlock Grid.Row="2" Grid.Column="0" Margin="0,0,8,8" Text="Center X / Y" />
+                                            <StackPanel Grid.Row="2" Grid.Column="1" Orientation="Horizontal" Margin="0,0,0,8">
+                                                <TextBox Width="104" Margin="0,0,8,0" Text="{Binding SelectedOperation.Feature.CenterX, UpdateSourceTrigger=PropertyChanged}" />
+                                                <TextBox Width="104" Text="{Binding SelectedOperation.Feature.CenterY, UpdateSourceTrigger=PropertyChanged}" />
+                                            </StackPanel>
+                                            <TextBlock Grid.Row="3" Grid.Column="0" Margin="0,0,8,8" Text="Length / Width" Visibility="{Binding FeatureSizeVisibility}" />
+                                            <StackPanel Grid.Row="3" Grid.Column="1" Orientation="Horizontal" Margin="0,0,0,8" Visibility="{Binding FeatureSizeVisibility}">
+                                                <TextBox Width="104" Margin="0,0,8,0" Text="{Binding SelectedOperation.Feature.Length, UpdateSourceTrigger=PropertyChanged}" />
+                                                <TextBox Width="104" Text="{Binding SelectedOperation.Feature.Width, UpdateSourceTrigger=PropertyChanged}" />
+                                            </StackPanel>
+                                            <TextBlock Grid.Row="4" Grid.Column="0" Margin="0,0,8,8" Text="Start / Depth" />
+                                            <StackPanel Grid.Row="4" Grid.Column="1" Orientation="Horizontal" Margin="0,0,0,8">
+                                                <TextBox Width="104" Margin="0,0,8,0" Text="{Binding SelectedOperation.Feature.StartZ, UpdateSourceTrigger=PropertyChanged}" />
+                                                <TextBox Width="104" Text="{Binding SelectedOperation.Feature.Depth, UpdateSourceTrigger=PropertyChanged}" />
+                                            </StackPanel>
+                                            <TextBlock Grid.Row="5" Grid.Column="0" Margin="0,0,8,0" Text="Dia / Side" Visibility="{Binding FeatureDiameterSideVisibility}" />
+                                            <StackPanel Grid.Row="5" Grid.Column="1" Orientation="Horizontal" Visibility="{Binding FeatureDiameterSideVisibility}">
+                                                <TextBox Width="104" Margin="0,0,8,0" Text="{Binding SelectedOperation.Feature.Diameter, UpdateSourceTrigger=PropertyChanged}" Visibility="{Binding FeatureDiameterVisibility}" />
+                                                <CheckBox VerticalAlignment="Center"
+                                                          Content="Inside"
+                                                          IsChecked="{Binding SelectedOperation.Feature.InsideProfile}"
+                                                          Visibility="{Binding InsideProfileVisibility}" />
+                                            </StackPanel>
+                                        </Grid>
+                                    </GroupBox>
+
+                                    <GroupBox Header="Drilling" Visibility="{Binding DrillSettingsVisibility}">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="102" />
+                                                <ColumnDefinition Width="*" />
+                                            </Grid.ColumnDefinitions>
+                                            <Grid.RowDefinitions>
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="Auto" />
+                                            </Grid.RowDefinitions>
+
+                                            <TextBlock Grid.Row="0" Grid.Column="0" Margin="0,0,8,8" Text="Peck / Retract" />
+                                            <StackPanel Grid.Row="0" Grid.Column="1" Orientation="Horizontal" Margin="0,0,0,8">
+                                                <TextBox Width="104" Margin="0,0,8,0" Text="{Binding SelectedOperation.DrillPeckDepth, UpdateSourceTrigger=PropertyChanged}" />
+                                                <TextBox Width="104" Text="{Binding SelectedOperation.DrillRetractDistance, UpdateSourceTrigger=PropertyChanged}" />
+                                            </StackPanel>
+                                            <CheckBox Grid.Row="1"
+                                                      Grid.Column="1"
+                                                      Content="Full peck retract to clearance"
+                                                      IsChecked="{Binding SelectedOperation.DrillFullRetract}" />
+                                        </Grid>
+                                    </GroupBox>
+
+                                    <GroupBox Header="Pattern / Notes">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="102" />
+                                                <ColumnDefinition Width="*" />
+                                            </Grid.ColumnDefinitions>
+                                            <Grid.RowDefinitions>
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="Auto" />
+                                            </Grid.RowDefinitions>
+
+                                            <TextBlock Grid.Row="0" Grid.Column="0" Margin="0,0,8,8" Text="Rows / Cols" Visibility="{Binding PatternSettingsVisibility}" />
+                                            <StackPanel Grid.Row="0" Grid.Column="1" Orientation="Horizontal" Margin="0,0,0,8" Visibility="{Binding PatternSettingsVisibility}">
+                                                <TextBox Width="104" Margin="0,0,8,0" Text="{Binding SelectedOperation.Feature.Rows, UpdateSourceTrigger=PropertyChanged}" />
+                                                <TextBox Width="104" Text="{Binding SelectedOperation.Feature.Columns, UpdateSourceTrigger=PropertyChanged}" />
+                                            </StackPanel>
+                                            <TextBlock Grid.Row="1" Grid.Column="0" Margin="0,0,8,8" Text="Pitch X / Y" Visibility="{Binding PatternSettingsVisibility}" />
+                                            <StackPanel Grid.Row="1" Grid.Column="1" Orientation="Horizontal" Margin="0,0,0,8" Visibility="{Binding PatternSettingsVisibility}">
+                                                <TextBox Width="104" Margin="0,0,8,0" Text="{Binding SelectedOperation.Feature.PitchX, UpdateSourceTrigger=PropertyChanged}" />
+                                                <TextBox Width="104" Text="{Binding SelectedOperation.Feature.PitchY, UpdateSourceTrigger=PropertyChanged}" />
+                                            </StackPanel>
+                                            <TextBlock Grid.Row="2" Grid.Column="0" Margin="0,0,8,8" Text="Rotation" Visibility="{Binding RotationSettingsVisibility}" />
+                                            <TextBox Grid.Row="2" Grid.Column="1"
+                                                     Width="104"
+                                                     HorizontalAlignment="Left"
+                                                     Margin="0,0,0,8"
+                                                     Visibility="{Binding RotationSettingsVisibility}"
+                                                     Text="{Binding SelectedOperation.Feature.RotationDegrees, UpdateSourceTrigger=PropertyChanged}" />
+                                            <TextBlock Grid.Row="3" Grid.Column="0" Margin="0,0,8,0" Text="Notes" />
+                                            <TextBox Grid.Row="3" Grid.Column="1"
+                                                     MinHeight="54"
+                                                     AcceptsReturn="True"
+                                                     TextWrapping="Wrap"
+                                                     VerticalScrollBarVisibility="Auto"
+                                                     Text="{Binding SelectedOperation.Notes, UpdateSourceTrigger=PropertyChanged}" />
+                                        </Grid>
+                                    </GroupBox>
+                                </StackPanel>
+                            </ScrollViewer>
+                        </Grid>
+                    </TabItem>
+                </TabControl>
+            </Border>
+
+            <Grid Grid.Column="1">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <Border Grid.Row="0" Style="{StaticResource CardStyle}" Margin="0,0,14,12" Background="#F0ECE2">
+                    <Grid>
+                        <Border CornerRadius="14"
+                                Background="#2C313A" />
+
+                        <Viewport3D x:Name="PreviewViewport"
+                                    ClipToBounds="True"
+                                    MouseLeftButtonUp="PreviewViewport_MouseLeftButtonUp"
+                                    MouseRightButtonDown="PreviewViewport_MouseRightButtonDown"
+                                    MouseRightButtonUp="PreviewViewport_MouseRightButtonUp"
+                                    MouseMove="PreviewViewport_MouseMove"
+                                    MouseWheel="PreviewViewport_MouseWheel">
+                            <Viewport3D.Camera>
+                                <PerspectiveCamera x:Name="PreviewCamera"
+                                                   FieldOfView="46"
+                                                   UpDirection="0,0,1" />
+                            </Viewport3D.Camera>
+                            <ModelVisual3D Content="{Binding PreviewSceneModel}" />
+                        </Viewport3D>
+
+                        <Viewport3D x:Name="PreviewOverlayViewport"
+                                    ClipToBounds="True"
+                                    IsHitTestVisible="False">
+                            <Viewport3D.Camera>
+                                <PerspectiveCamera x:Name="PreviewOverlayCamera"
+                                                   FieldOfView="46"
+                                                   UpDirection="0,0,1" />
+                            </Viewport3D.Camera>
+                            <ModelVisual3D Content="{Binding PreviewOverlaySceneModel}" />
+                        </Viewport3D>
+
+                        <Border HorizontalAlignment="Left"
+                                VerticalAlignment="Top"
+                                Width="360"
+                                Margin="16"
+                                Padding="12"
+                                CornerRadius="12"
+                                Background="#D91C232B">
+                            <StackPanel>
+                                <TextBlock Foreground="#FFF6F1E6"
+                                           FontWeight="Bold"
+                                           FontSize="16"
+                                           Text="3D Model / Feature View" />
+                                <TextBlock Margin="0,8,0,0"
+                                           Foreground="#FFE5DDD0"
+                                           TextWrapping="Wrap"
+                                           Text="{Binding PreviewSummary}" />
+                            </StackPanel>
+                        </Border>
+
+                        <Border HorizontalAlignment="Right"
+                                VerticalAlignment="Bottom"
+                                Margin="16"
+                                Padding="10"
+                                CornerRadius="12"
+                                Background="#BF11161B">
+                            <TextBlock Foreground="#FFF0EBE2"
+                                       Text="Left-click face: point/bulk/raster/adaptive/Z-level/3D parallel/scallop/pencil plane | Circular edge: drill/boring | Edge: profile/2D contour/chamfer/pencil | Right-drag: orbit | Wheel: zoom" />
+                        </Border>
+                    </Grid>
+                </Border>
+
+                <Border Grid.Row="1" Style="{StaticResource CardStyle}" Margin="0,0,14,0" Background="#FFF1E1">
+                    <StackPanel>
+                        <TextBlock FontSize="16"
+                                   FontWeight="Bold"
+                                   Foreground="#243239"
+                                   Text="Toolpath Playback" />
+                        <StackPanel Orientation="Horizontal" Margin="0,8,0,8">
+                            <Button Content="Play" Command="{Binding PlayToolpathCommand}" />
+                            <Button Content="Pause" Command="{Binding PauseToolpathCommand}" />
+                            <Button Content="Step" Command="{Binding StepToolpathCommand}" />
+                            <Button Content="Stop" Command="{Binding StopToolpathCommand}" />
+                            <TextBlock VerticalAlignment="Center"
+                                       Margin="8,0,6,0"
+                                       Foreground="#38444C"
+                                       Text="Speed" />
+                            <TextBox Width="58"
+                                     VerticalContentAlignment="Center"
+                                     Text="{Binding PlaybackSpeed, UpdateSourceTrigger=PropertyChanged}" />
+                        </StackPanel>
+                        <Slider Minimum="0"
+                                Maximum="100"
+                                Value="{Binding ToolpathPlaybackProgress, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                        <TextBlock Margin="0,6,0,8"
+                                   Style="{StaticResource MutedTextStyle}"
+                                   Text="{Binding PlaybackStatus}" />
+                        <TextBlock Style="{StaticResource MutedTextStyle}"
+                                   Text="Imported model geometry can be selected directly. Profile, 2D Contour, Chamfer, and PencilCleanup operations can use STEP model edges; Drill and Boring operations can pick circular model edges for center, diameter, and depth; BulkRemoval, Raster, and AdaptiveClearing use a selected face as the roughing floor and protect closed model loops above it; ZLevelFinishing uses the selected face as its lower limit and slices the model mesh into waterline passes; Parallel3DFinishing follows the top model surface in rotated raster lanes; ScallopFinishing follows the top model surface in constant-stepover rings; PencilCleanup follows selected or automatic reachable model edge curves. Yellow highlights the selected operation, green shows other cutting moves, and orange shows selected/protected model geometry. During playback, green opaque stock is removed by the moving tool while the blue model stays as the cut-depth reference." />
+                    </StackPanel>
+                </Border>
+            </Grid>
+
+            <ScrollViewer Grid.Column="2" VerticalScrollBarVisibility="Auto">
+                <StackPanel>
+                    <Border Style="{StaticResource CardStyle}" Background="#FFF1E1">
+                        <StackPanel>
+                            <TextBlock FontSize="18" FontWeight="Bold" Foreground="#243239" Text="Workspace Summary" />
+                            <TextBlock Margin="0,10,0,0"
+                                       Style="{StaticResource MutedTextStyle}"
+                                       Text="{Binding ProjectSummary}" />
+                        </StackPanel>
+                    </Border>
+
+                    <Border Style="{StaticResource CardStyle}" Background="#EAF3EE">
+                        <StackPanel>
+                            <TextBlock FontSize="18" FontWeight="Bold" Foreground="#243239" Text="Status" />
+                            <TextBlock Margin="0,10,0,0"
+                                       Style="{StaticResource MutedTextStyle}"
+                                       Text="{Binding StatusMessage}" />
+                        </StackPanel>
+                    </Border>
+
+                    <Border Style="{StaticResource CardStyle}" Background="#FFF8E8">
+                        <StackPanel>
+                            <TextBlock FontSize="18" FontWeight="Bold" Foreground="#243239" Text="Toolpath Diagnostics" />
+                            <Border Margin="0,10,0,0"
+                                    BorderThickness="1"
+                                    BorderBrush="#E0D2AD"
+                                    CornerRadius="12"
+                                    Background="#172028"
+                                    Padding="10"
+                                    MaxHeight="260">
+                                <ScrollViewer VerticalScrollBarVisibility="Auto"
+                                              HorizontalScrollBarVisibility="Disabled">
+                                    <TextBlock FontFamily="Consolas"
+                                               FontSize="12"
+                                               Foreground="#E8F4F8"
+                                               TextWrapping="Wrap"
+                                               Text="{Binding ToolpathDiagnostics}" />
+                                </ScrollViewer>
+                            </Border>
+                        </StackPanel>
+                    </Border>
+
+                    <Border Style="{StaticResource CardStyle}">
+                        <StackPanel>
+                            <TextBlock FontSize="18" FontWeight="Bold" Foreground="#243239" Text="Stock Removal Preview" />
+                            <TextBlock Margin="0,10,0,12"
+                                       Style="{StaticResource MutedTextStyle}"
+                                       Text="{Binding SimulationSummary}" />
+                            <Border BorderThickness="1"
+                                    BorderBrush="#D9D2C5"
+                                    CornerRadius="12"
+                                    Background="#F8F4EC"
+                                    Padding="10">
+                                <Image Height="220"
+                                       Stretch="Uniform"
+                                       Source="{Binding SimulationBitmap}" />
+                            </Border>
+                        </StackPanel>
+                    </Border>
+
+                    <Border Style="{StaticResource CardStyle}">
+                        <StackPanel>
+                            <TextBlock FontSize="18" FontWeight="Bold" Foreground="#243239" Text="GRBL G-code Preview" />
+                            <TextBox Margin="0,12,0,0"
+                                     Height="360"
+                                     FontFamily="Consolas"
+                                     FontSize="12"
+                                     Background="#172028"
+                                     Foreground="#E8F4F8"
+                                     BorderThickness="0"
+                                     IsReadOnly="True"
+                                     Text="{Binding GeneratedGCode, Mode=OneWay}"
+                                     AcceptsReturn="True"
+                                     AcceptsTab="True"
+                                     TextWrapping="NoWrap"
+                                     HorizontalScrollBarVisibility="Auto"
+                                     VerticalScrollBarVisibility="Auto" />
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+            </ScrollViewer>
+        </Grid>
+    </Grid>
+</Window>

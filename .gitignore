@@ -1,0 +1,26 @@
+# Build output
+bin/
+obj/
+temp_build_verify*/
+packages_temp/
+
+# Visual Studio local state
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Rider / JetBrains local state
+.idea/
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+*.tmp
+*.log
+
+# Publish/output folders
+artifacts/
+publish/
+*.nupkg

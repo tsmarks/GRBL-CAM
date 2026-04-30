@@ -1,0 +1,271 @@
+<Window x:Class="GRBL_Cam.ToolLibraryWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Tool Library"
+        Width="1280"
+        Height="820"
+        MinWidth="1080"
+        MinHeight="680"
+        Background="#F7F4EC"
+        FontFamily="Bahnschrift">
+    <Window.Resources>
+        <Style x:Key="CardStyle" TargetType="Border">
+            <Setter Property="Background" Value="#FFFCF7" />
+            <Setter Property="CornerRadius" Value="16" />
+            <Setter Property="Padding" Value="16" />
+            <Setter Property="Margin" Value="0,0,0,12" />
+            <Setter Property="BorderBrush" Value="#E0D9CB" />
+            <Setter Property="BorderThickness" Value="1" />
+        </Style>
+        <Style TargetType="Button">
+            <Setter Property="Padding" Value="14,8" />
+            <Setter Property="Margin" Value="0,0,8,0" />
+            <Setter Property="Background" Value="#173F3A" />
+            <Setter Property="Foreground" Value="White" />
+            <Setter Property="BorderBrush" Value="#173F3A" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+        </Style>
+        <Style TargetType="GroupBox">
+            <Setter Property="Margin" Value="0,0,0,12" />
+            <Setter Property="Padding" Value="10" />
+            <Setter Property="BorderBrush" Value="#D8D2C4" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Background" Value="#FFFDF9" />
+        </Style>
+        <Style x:Key="MutedTextStyle" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="#5B6770" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+        </Style>
+        <Style TargetType="TextBox">
+            <EventSetter Event="TextChanged" Handler="ToolEditingControl_Changed" />
+        </Style>
+        <Style TargetType="ComboBox">
+            <EventSetter Event="SelectionChanged" Handler="ToolEditingControl_Changed" />
+        </Style>
+    </Window.Resources>
+
+    <Grid Margin="18">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <Border Grid.Row="0" Style="{StaticResource CardStyle}" Background="#EFE8DA">
+            <DockPanel>
+                <StackPanel DockPanel.Dock="Left">
+                    <TextBlock FontSize="24"
+                               FontWeight="Bold"
+                               Foreground="#243239"
+                               Text="Tool Library" />
+                    <TextBlock Margin="0,6,0,0"
+                               Style="{StaticResource MutedTextStyle}"
+                               Text="Create and edit cutter geometry here. The preview shows flute length, cutting length, shank, and the active tool shape." />
+                </StackPanel>
+                <StackPanel DockPanel.Dock="Right"
+                            Orientation="Horizontal"
+                            HorizontalAlignment="Right"
+                            VerticalAlignment="Center">
+                    <Button Content="Add Tool" Command="{Binding AddToolCommand}" />
+                    <Button Content="Remove Tool" Command="{Binding RemoveToolCommand}" />
+                    <Button Content="Close" Click="CloseButton_Click" />
+                </StackPanel>
+            </DockPanel>
+        </Border>
+
+        <Grid Grid.Row="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="500" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+
+            <Border Grid.Column="0" Style="{StaticResource CardStyle}" Margin="0,0,14,0">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+
+                    <DataGrid x:Name="ToolGrid"
+                              AutoGenerateColumns="False"
+                              ItemsSource="{Binding ToolLibrary}"
+                              SelectedItem="{Binding SelectedTool, Mode=TwoWay}"
+                              CanUserAddRows="False"
+                              SelectionChanged="ToolGrid_SelectionChanged">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="T#" Binding="{Binding Number}" Width="54" />
+                            <DataGridTextColumn Header="Name" Binding="{Binding Name}" Width="*" />
+                            <DataGridComboBoxColumn x:Name="StyleColumn"
+                                                    Header="Style"
+                                                    Width="132"
+                                                    SelectedItemBinding="{Binding Style, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                            <DataGridTextColumn Header="Dia" Binding="{Binding CuttingDiameter}" Width="62" />
+                            <DataGridTextColumn Header="Flutes" Binding="{Binding FluteCount}" Width="64" />
+                        </DataGrid.Columns>
+                    </DataGrid>
+
+                    <TextBlock Grid.Row="1"
+                               Margin="0,12,0,0"
+                               Style="{StaticResource MutedTextStyle}"
+                               Text="Select a row to edit the full tool definition. Style values are populated directly by this window so the dropdown stays connected." />
+                </Grid>
+            </Border>
+
+            <Grid Grid.Column="1">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="360" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+
+                <Border Grid.Row="0" Style="{StaticResource CardStyle}" Background="#2C313A">
+                    <Grid>
+                        <Viewport3D x:Name="ToolPreviewViewport" ClipToBounds="True">
+                            <Viewport3D.Camera>
+                                <PerspectiveCamera x:Name="ToolPreviewCamera"
+                                                   FieldOfView="42"
+                                                   UpDirection="0,0,1" />
+                            </Viewport3D.Camera>
+                            <ModelVisual3D x:Name="ToolPreviewVisual" />
+                        </Viewport3D>
+                        <Border HorizontalAlignment="Left"
+                                VerticalAlignment="Top"
+                                Width="330"
+                                Margin="12"
+                                Padding="10"
+                                CornerRadius="12"
+                                Background="#D91C232B">
+                            <TextBlock x:Name="ToolPreviewSummary"
+                                       Foreground="#FFF6F1E6"
+                                       TextWrapping="Wrap" />
+                        </Border>
+                    </Grid>
+                </Border>
+
+                <ScrollViewer Grid.Row="1"
+                              VerticalScrollBarVisibility="Auto"
+                              Padding="0,0,6,0">
+                    <StackPanel>
+                        <GroupBox Header="Selected Tool Identity">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="128" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+
+                                <TextBlock Grid.Row="0" Grid.Column="0" Margin="0,0,8,8" Text="Number / Name" />
+                                <StackPanel Grid.Row="0" Grid.Column="1" Orientation="Horizontal" Margin="0,0,0,8">
+                                    <TextBox Width="70" Margin="0,0,8,0" Text="{Binding SelectedTool.Number, UpdateSourceTrigger=PropertyChanged}" />
+                                    <TextBox Width="260" Text="{Binding SelectedTool.Name, UpdateSourceTrigger=PropertyChanged}" />
+                                </StackPanel>
+                                <TextBlock Grid.Row="1" Grid.Column="0" Margin="0,0,8,0" Text="Shape" />
+                                <ComboBox Grid.Row="1"
+                                          Grid.Column="1"
+                                          Width="220"
+                                          HorizontalAlignment="Left"
+                                          ItemsSource="{Binding ToolStyles}"
+                                          SelectedItem="{Binding SelectedTool.Style, Mode=TwoWay}" />
+                            </Grid>
+                        </GroupBox>
+
+                        <GroupBox Header="Cutting Geometry">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="128" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+
+                                <TextBlock Grid.Row="0" Grid.Column="0" Margin="0,0,8,8" Text="Dia / Shank" />
+                                <StackPanel Grid.Row="0" Grid.Column="1" Orientation="Horizontal" Margin="0,0,0,8">
+                                    <TextBox Width="90" Margin="0,0,8,0" Text="{Binding SelectedTool.CuttingDiameter, UpdateSourceTrigger=PropertyChanged}" />
+                                    <TextBox Width="90" Text="{Binding SelectedTool.ShankDiameter, UpdateSourceTrigger=PropertyChanged}" />
+                                </StackPanel>
+                                <TextBlock Grid.Row="1" Grid.Column="0" Margin="0,0,8,8" Text="Corner / Tip Dia" />
+                                <StackPanel Grid.Row="1" Grid.Column="1" Orientation="Horizontal" Margin="0,0,0,8">
+                                    <TextBox Width="90" Margin="0,0,8,0" Text="{Binding SelectedTool.CornerRadius, UpdateSourceTrigger=PropertyChanged}" />
+                                    <TextBox Width="90" Text="{Binding SelectedTool.TipDiameter, UpdateSourceTrigger=PropertyChanged}" />
+                                </StackPanel>
+                                <TextBlock Grid.Row="2" Grid.Column="0" Margin="0,0,8,8" Text="Tip / Taper Angle" />
+                                <StackPanel Grid.Row="2" Grid.Column="1" Orientation="Horizontal" Margin="0,0,0,8">
+                                    <TextBox Width="90" Margin="0,0,8,0" Text="{Binding SelectedTool.TipAngleDegrees, UpdateSourceTrigger=PropertyChanged}" />
+                                    <TextBox Width="90" Text="{Binding SelectedTool.TaperAngleDegrees, UpdateSourceTrigger=PropertyChanged}" />
+                                </StackPanel>
+                                <TextBlock Grid.Row="3" Grid.Column="0" Margin="0,0,8,0" Text="Neck Dia / Len" />
+                                <StackPanel Grid.Row="3" Grid.Column="1" Orientation="Horizontal">
+                                    <TextBox Width="90" Margin="0,0,8,0" Text="{Binding SelectedTool.NeckDiameter, UpdateSourceTrigger=PropertyChanged}" />
+                                    <TextBox Width="90" Text="{Binding SelectedTool.NeckLength, UpdateSourceTrigger=PropertyChanged}" />
+                                </StackPanel>
+                            </Grid>
+                        </GroupBox>
+
+                        <GroupBox Header="Flutes And Lengths">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="128" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+
+                                <TextBlock Grid.Row="0" Grid.Column="0" Margin="0,0,8,8" Text="Flutes / Length" />
+                                <StackPanel Grid.Row="0" Grid.Column="1" Orientation="Horizontal" Margin="0,0,0,8">
+                                    <TextBox Width="90" Margin="0,0,8,0" Text="{Binding SelectedTool.FluteCount, UpdateSourceTrigger=PropertyChanged}" />
+                                    <TextBox Width="90" Text="{Binding SelectedTool.FluteLength, UpdateSourceTrigger=PropertyChanged}" />
+                                </StackPanel>
+                                <TextBlock Grid.Row="1" Grid.Column="0" Margin="0,0,8,8" Text="Cut Len / Stickout" />
+                                <StackPanel Grid.Row="1" Grid.Column="1" Orientation="Horizontal" Margin="0,0,0,8">
+                                    <TextBox Width="90" Margin="0,0,8,0" Text="{Binding SelectedTool.CuttingLength, UpdateSourceTrigger=PropertyChanged}" />
+                                    <TextBox Width="90" Text="{Binding SelectedTool.StickOut, UpdateSourceTrigger=PropertyChanged}" />
+                                </StackPanel>
+                                <TextBlock Grid.Row="2" Grid.Column="0" Margin="0,0,8,0" Text="Overall Length" />
+                                <TextBox Grid.Row="2"
+                                         Grid.Column="1"
+                                         Width="90"
+                                         HorizontalAlignment="Left"
+                                         Text="{Binding SelectedTool.OverallLength, UpdateSourceTrigger=PropertyChanged}" />
+                            </Grid>
+                        </GroupBox>
+
+                        <GroupBox Header="CAM Defaults">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="128" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+
+                                <TextBlock Grid.Row="0" Grid.Column="0" Margin="0,0,8,8" Text="StepDn / StepOv" />
+                                <StackPanel Grid.Row="0" Grid.Column="1" Orientation="Horizontal" Margin="0,0,0,8">
+                                    <TextBox Width="90" Margin="0,0,8,0" Text="{Binding SelectedTool.MaxStepDown, UpdateSourceTrigger=PropertyChanged}" />
+                                    <TextBox Width="90" Text="{Binding SelectedTool.MaxStepOver, UpdateSourceTrigger=PropertyChanged}" />
+                                </StackPanel>
+                                <TextBlock Grid.Row="1" Grid.Column="0" Margin="0,0,8,0" Text="Notes" />
+                                <TextBox Grid.Row="1"
+                                         Grid.Column="1"
+                                         Height="76"
+                                         AcceptsReturn="True"
+                                         TextWrapping="Wrap"
+                                         VerticalScrollBarVisibility="Auto"
+                                         Text="{Binding SelectedTool.Notes, UpdateSourceTrigger=PropertyChanged}" />
+                            </Grid>
+                        </GroupBox>
+                    </StackPanel>
+                </ScrollViewer>
+            </Grid>
+        </Grid>
+    </Grid>
+</Window>
