@@ -2,6 +2,7 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:models="clr-namespace:GRBL_Cam.Models"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         mc:Ignorable="d"
         Title="GRBL Cam"
@@ -180,15 +181,120 @@
                                                           CanUserAddRows="True"
                                                           ItemsSource="{Binding SelectedMachineProfile.Axes}"
                                                           HeadersVisibility="Column"
+                                                          ScrollViewer.HorizontalScrollBarVisibility="Auto"
                                                           MinHeight="170">
                                                     <DataGrid.Columns>
                                                         <DataGridTextColumn Header="Axis" Binding="{Binding Name}" Width="*" />
-                                                        <DataGridComboBoxColumn Header="Type" SelectedItemBinding="{Binding Type}" Width="90" ItemsSource="{Binding DataContext.AxisTypes, RelativeSource={RelativeSource AncestorType=Window}}" />
-                                                        <DataGridComboBoxColumn Header="Around" SelectedItemBinding="{Binding RotatesAround}" Width="82" ItemsSource="{Binding DataContext.RotaryAxisDirections, RelativeSource={RelativeSource AncestorType=Window}}" />
+                                                        <DataGridTemplateColumn Header="Type" Width="90">
+                                                            <DataGridTemplateColumn.CellTemplate>
+                                                                <DataTemplate>
+                                                                    <TextBlock Text="{Binding Type}" />
+                                                                </DataTemplate>
+                                                            </DataGridTemplateColumn.CellTemplate>
+                                                            <DataGridTemplateColumn.CellEditingTemplate>
+                                                                <DataTemplate>
+                                                                    <ComboBox ItemsSource="{Binding DataContext.AxisTypes, RelativeSource={RelativeSource AncestorType=DataGrid}}"
+                                                                              SelectedItem="{Binding Type, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                                                </DataTemplate>
+                                                            </DataGridTemplateColumn.CellEditingTemplate>
+                                                        </DataGridTemplateColumn>
+                                                        <DataGridTemplateColumn Header="Around" Width="82">
+                                                            <DataGridTemplateColumn.CellTemplate>
+                                                                <DataTemplate>
+                                                                    <TextBlock Text="{Binding RotatesAround}">
+                                                                        <TextBlock.Style>
+                                                                            <Style TargetType="TextBlock">
+                                                                                <Setter Property="Visibility" Value="Collapsed" />
+                                                                                <Style.Triggers>
+                                                                                    <DataTrigger Binding="{Binding Type}" Value="{x:Static models:AxisType.Rotary}">
+                                                                                        <Setter Property="Visibility" Value="Visible" />
+                                                                                    </DataTrigger>
+                                                                                </Style.Triggers>
+                                                                            </Style>
+                                                                        </TextBlock.Style>
+                                                                    </TextBlock>
+                                                                </DataTemplate>
+                                                            </DataGridTemplateColumn.CellTemplate>
+                                                            <DataGridTemplateColumn.CellEditingTemplate>
+                                                                <DataTemplate>
+                                                                    <ComboBox ItemsSource="{Binding DataContext.RotaryAxisDirections, RelativeSource={RelativeSource AncestorType=DataGrid}}"
+                                                                              SelectedItem="{Binding RotatesAround, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}">
+                                                                        <ComboBox.Style>
+                                                                            <Style TargetType="ComboBox" BasedOn="{StaticResource {x:Type ComboBox}}">
+                                                                                <Setter Property="Visibility" Value="Collapsed" />
+                                                                                <Style.Triggers>
+                                                                                    <DataTrigger Binding="{Binding Type}" Value="{x:Static models:AxisType.Rotary}">
+                                                                                        <Setter Property="Visibility" Value="Visible" />
+                                                                                    </DataTrigger>
+                                                                                </Style.Triggers>
+                                                                            </Style>
+                                                                        </ComboBox.Style>
+                                                                    </ComboBox>
+                                                                </DataTemplate>
+                                                            </DataGridTemplateColumn.CellEditingTemplate>
+                                                        </DataGridTemplateColumn>
                                                         <DataGridTextColumn Header="Min" Binding="{Binding TravelMin}" Width="62" />
                                                         <DataGridTextColumn Header="Max" Binding="{Binding TravelMax}" Width="62" />
                                                         <DataGridTextColumn Header="Feed" Binding="{Binding MaxFeedRate}" Width="72" />
                                                         <DataGridTextColumn Header="Home" Binding="{Binding HomePosition}" Width="72" />
+                                                    </DataGrid.Columns>
+                                                </DataGrid>
+                                            </StackPanel>
+                                        </GroupBox>
+
+                                        <GroupBox Header="Rotary Pivot / GRBL Compensation">
+                                            <StackPanel>
+                                                <TextBlock Margin="0,0,0,6"
+                                                           Style="{StaticResource MutedTextStyle}"
+                                                           Text="Pivot offsets are machine-coordinate distances from the work origin to each rotary centerline. Zero is the machine angle offset added when posting." />
+                                                <DataGrid AutoGenerateColumns="False"
+                                                          CanUserAddRows="False"
+                                                          ItemsSource="{Binding SelectedMachineProfile.Axes}"
+                                                          HeadersVisibility="Column"
+                                                          ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                                                          MinHeight="86">
+                                                    <DataGrid.RowStyle>
+                                                        <Style TargetType="DataGridRow">
+                                                            <Setter Property="Visibility" Value="Visible" />
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding Type}" Value="{x:Static models:AxisType.Linear}">
+                                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </DataGrid.RowStyle>
+                                                    <DataGrid.Columns>
+                                                        <DataGridTextColumn Header="Axis" Binding="{Binding Name}" Width="48" />
+                                                        <DataGridTemplateColumn Header="Around" Width="80">
+                                                            <DataGridTemplateColumn.CellTemplate>
+                                                                <DataTemplate>
+                                                                    <TextBlock Text="{Binding RotatesAround}" />
+                                                                </DataTemplate>
+                                                            </DataGridTemplateColumn.CellTemplate>
+                                                            <DataGridTemplateColumn.CellEditingTemplate>
+                                                                <DataTemplate>
+                                                                    <ComboBox ItemsSource="{Binding DataContext.RotaryAxisDirections, RelativeSource={RelativeSource AncestorType=DataGrid}}"
+                                                                              SelectedItem="{Binding RotatesAround, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                                                </DataTemplate>
+                                                            </DataGridTemplateColumn.CellEditingTemplate>
+                                                        </DataGridTemplateColumn>
+                                                        <DataGridTemplateColumn Header="Mount" Width="88">
+                                                            <DataGridTemplateColumn.CellTemplate>
+                                                                <DataTemplate>
+                                                                    <TextBlock Text="{Binding Mount}" />
+                                                                </DataTemplate>
+                                                            </DataGridTemplateColumn.CellTemplate>
+                                                            <DataGridTemplateColumn.CellEditingTemplate>
+                                                                <DataTemplate>
+                                                                    <ComboBox ItemsSource="{Binding DataContext.RotaryAxisMounts, RelativeSource={RelativeSource AncestorType=DataGrid}}"
+                                                                              SelectedItem="{Binding Mount, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                                                </DataTemplate>
+                                                            </DataGridTemplateColumn.CellEditingTemplate>
+                                                        </DataGridTemplateColumn>
+                                                        <DataGridTextColumn Header="Pivot X" Binding="{Binding PivotOffsetX}" Width="76" />
+                                                        <DataGridTextColumn Header="Pivot Y" Binding="{Binding PivotOffsetY}" Width="76" />
+                                                        <DataGridTextColumn Header="Pivot Z" Binding="{Binding PivotOffsetZ}" Width="76" />
+                                                        <DataGridTextColumn Header="Zero" Binding="{Binding ZeroOffset}" Width="68" />
                                                     </DataGrid.Columns>
                                                 </DataGrid>
                                             </StackPanel>
@@ -379,10 +485,11 @@
                                         <ComboBox Grid.Row="0" Grid.Column="1" Margin="0,0,0,8" ItemsSource="{Binding PartSourceTypes}" SelectedItem="{Binding CurrentSetup.Part.SourceType}" />
                                         <TextBlock Grid.Row="1" Grid.Column="0" Margin="0,0,8,8" Text="Path" />
                                         <TextBox Grid.Row="1" Grid.Column="1" Margin="0,0,0,8" Text="{Binding CurrentSetup.Part.SourcePath, UpdateSourceTrigger=PropertyChanged}" />
-                                        <TextBlock Grid.Row="2" Grid.Column="0" Margin="0,0,8,8" Text="Rotation A / B" />
+                                        <TextBlock Grid.Row="2" Grid.Column="0" Margin="0,0,8,8" Text="Rotation X / Y / Z" />
                                         <StackPanel Grid.Row="2" Grid.Column="1" Orientation="Horizontal" Margin="0,0,0,8">
                                             <TextBox Width="74" Margin="0,0,8,0" Text="{Binding CurrentSetup.Part.RotationA, UpdateSourceTrigger=PropertyChanged}" />
-                                            <TextBox Width="74" Text="{Binding CurrentSetup.Part.RotationB, UpdateSourceTrigger=PropertyChanged}" />
+                                            <TextBox Width="74" Margin="0,0,8,0" Text="{Binding CurrentSetup.Part.RotationB, UpdateSourceTrigger=PropertyChanged}" />
+                                            <TextBox Width="74" Text="{Binding CurrentSetup.Part.RotationC, UpdateSourceTrigger=PropertyChanged}" />
                                         </StackPanel>
                                         <TextBlock Grid.Row="3" Grid.Column="0" Margin="0,0,8,0" Text="Primitive Size" />
                                         <StackPanel Grid.Row="3" Grid.Column="1" Orientation="Horizontal">
@@ -395,7 +502,7 @@
                                             <Button Content="Apply to 3D View" Click="RefreshPreviewButton_Click" />
                                             <TextBlock VerticalAlignment="Center"
                                                        Style="{StaticResource MutedTextStyle}"
-                                                       Text="Imported models use native size. Rotation is applied before stock/WCS and posts as indexed A/B when the machine supports it." />
+                                                       Text="Imported models use native size. XYZ rotation orients geometry before stock, WCS, and multiaxis indexing." />
                                         </StackPanel>
                                     </Grid>
                                 </GroupBox>
@@ -433,16 +540,17 @@
                                             <TextBox Width="62" Margin="0,0,6,0" Text="{Binding CurrentSetup.Stock.AxialAllowance, UpdateSourceTrigger=PropertyChanged}" />
                                             <TextBox Width="62" Text="{Binding CurrentSetup.Stock.Diameter, UpdateSourceTrigger=PropertyChanged}" />
                                         </StackPanel>
-                                        <TextBlock Grid.Row="4" Grid.Column="0" Margin="0,10,8,0" Text="Stock Offset X / Y / Z" />
+                                        <TextBlock Grid.Row="4" Grid.Column="0" Margin="0,10,8,0" Text="Stock Offset local X / Y / Z" />
                                         <StackPanel Grid.Row="4" Grid.Column="1" Orientation="Horizontal" Margin="0,10,0,0">
                                             <TextBox Width="62" Margin="0,0,6,0" Text="{Binding CurrentSetup.Stock.OffsetX, UpdateSourceTrigger=PropertyChanged}" />
                                             <TextBox Width="62" Margin="0,0,6,0" Text="{Binding CurrentSetup.Stock.OffsetY, UpdateSourceTrigger=PropertyChanged}" />
                                             <TextBox Width="62" Text="{Binding CurrentSetup.Stock.OffsetZ, UpdateSourceTrigger=PropertyChanged}" />
                                         </StackPanel>
-                                        <TextBlock Grid.Row="5" Grid.Column="0" Margin="0,10,8,0" Text="Stock Rot A / B" />
+                                        <TextBlock Grid.Row="5" Grid.Column="0" Margin="0,10,8,0" Text="Stock Rot X / Y / Z" />
                                         <StackPanel Grid.Row="5" Grid.Column="1" Orientation="Horizontal" Margin="0,10,0,0">
                                             <TextBox Width="62" Margin="0,0,6,0" Text="{Binding CurrentSetup.Stock.RotationA, UpdateSourceTrigger=PropertyChanged}" />
-                                            <TextBox Width="62" Text="{Binding CurrentSetup.Stock.RotationB, UpdateSourceTrigger=PropertyChanged}" />
+                                            <TextBox Width="62" Margin="0,0,6,0" Text="{Binding CurrentSetup.Stock.RotationB, UpdateSourceTrigger=PropertyChanged}" />
+                                            <TextBox Width="62" Text="{Binding CurrentSetup.Stock.RotationC, UpdateSourceTrigger=PropertyChanged}" />
                                         </StackPanel>
                                         <StackPanel Grid.Row="6" Grid.Column="1" Orientation="Horizontal" Margin="0,10,0,0">
                                             <Button Content="Apply Stock to 3D View" Click="RefreshPreviewButton_Click" />
@@ -578,10 +686,10 @@
                                                 <TextBox Width="104" Margin="0,0,8,0" Text="{Binding SelectedOperation.TabWidth, UpdateSourceTrigger=LostFocus}" />
                                                 <TextBox Width="104" Text="{Binding SelectedOperation.TabHeight, UpdateSourceTrigger=LostFocus}" />
                                             </StackPanel>
-                                            <TextBlock Grid.Row="9" Grid.Column="0" Margin="0,0,8,8" Text="Index A / B" Visibility="{Binding IndexedRotarySettingsVisibility}" />
+                                            <TextBlock Grid.Row="9" Grid.Column="0" Margin="0,0,8,8" Text="{Binding RotaryIndexLabel}" Visibility="{Binding IndexedRotarySettingsVisibility}" />
                                             <StackPanel Grid.Row="9" Grid.Column="1" Orientation="Horizontal" Margin="0,0,0,8" Visibility="{Binding IndexedRotarySettingsVisibility}">
-                                                <TextBox Width="62" Margin="0,0,6,0" Text="{Binding SelectedOperation.RotaryIndexA, UpdateSourceTrigger=PropertyChanged}" />
-                                                <TextBox Width="62" Text="{Binding SelectedOperation.RotaryIndexB, UpdateSourceTrigger=PropertyChanged}" />
+                                                <TextBox Width="62" Margin="0,0,6,0" Text="{Binding SelectedOperation.RotaryIndexA, UpdateSourceTrigger=PropertyChanged}" Visibility="{Binding RotaryAIndexVisibility}" />
+                                                <TextBox Width="62" Text="{Binding SelectedOperation.RotaryIndexB, UpdateSourceTrigger=PropertyChanged}" Visibility="{Binding RotaryBIndexVisibility}" />
                                             </StackPanel>
                                             <WrapPanel Grid.Row="10" Grid.Column="0" Grid.ColumnSpan="2">
                                                 <CheckBox Margin="0,0,12,0" Content="Enabled" IsChecked="{Binding SelectedOperation.Enabled}" />

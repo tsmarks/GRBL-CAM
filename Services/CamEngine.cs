@@ -644,9 +644,10 @@ internal static class StockBoundsResolver
             partBounds.Value.SizeY > 0)
         {
             var bounds = partBounds.Value;
-            centerX = bounds.X + (bounds.SizeX / 2d) + setup.Stock.OffsetX;
-            centerY = bounds.Y + (bounds.SizeY / 2d) + setup.Stock.OffsetY;
-            topZ = bounds.Z + bounds.SizeZ + setup.Stock.OffsetZ;
+            var offset = GetOrientedStockOffset(setup);
+            centerX = bounds.X + (bounds.SizeX / 2d) + offset.X;
+            centerY = bounds.Y + (bounds.SizeY / 2d) + offset.Y;
+            topZ = bounds.Z + bounds.SizeZ + offset.Z;
             fallbackLength = bounds.SizeX + (radialAllowance * 2d);
             fallbackWidth = bounds.SizeY + (radialAllowance * 2d);
             fallbackHeight = bounds.SizeZ + Math.Max(setup.Stock.AxialAllowance, 0);
@@ -654,9 +655,10 @@ internal static class StockBoundsResolver
         }
         else
         {
-            centerX = setup.WorkOffset.X + setup.AlignmentOffsetX + setup.Stock.OffsetX;
-            centerY = setup.WorkOffset.Y + setup.AlignmentOffsetY + setup.Stock.OffsetY;
-            topZ = setup.WorkOffset.Z + setup.AlignmentOffsetZ + setup.Stock.OffsetZ;
+            var offset = GetOrientedStockOffset(setup);
+            centerX = setup.WorkOffset.X + setup.AlignmentOffsetX + offset.X;
+            centerY = setup.WorkOffset.Y + setup.AlignmentOffsetY + offset.Y;
+            topZ = setup.WorkOffset.Z + setup.AlignmentOffsetZ + offset.Z;
             fallbackLength = Math.Max(setup.Part.LengthX, 2d) + (radialAllowance * 2d);
             fallbackWidth = Math.Max(setup.Part.WidthY, 2d) + (radialAllowance * 2d);
             fallbackHeight = Math.Max(setup.Part.HeightZ, 2d) + Math.Max(setup.Stock.AxialAllowance, 0);
@@ -712,12 +714,30 @@ internal static class StockBoundsResolver
             bounds.Z + (bounds.SizeZ / 2d));
         AddRotation(transformGroup, new Vector3D(1, 0, 0), stock.RotationA, center);
         AddRotation(transformGroup, new Vector3D(0, 1, 0), stock.RotationB, center);
+        AddRotation(transformGroup, new Vector3D(0, 0, 1), stock.RotationC, center);
         return transformGroup.Children.Count switch
         {
             0 => Transform3D.Identity,
             1 => transformGroup.Children[0],
             _ => transformGroup
         };
+    }
+
+    private static Vector3D GetOrientedStockOffset(JobSetup setup)
+    {
+        var offset = new Vector3D(setup.Stock.OffsetX, setup.Stock.OffsetY, setup.Stock.OffsetZ);
+        if (offset.LengthSquared < 0.0000001)
+        {
+            return offset;
+        }
+
+        var transformGroup = new Transform3DGroup();
+        AddRotation(transformGroup, new Vector3D(1, 0, 0), setup.Part.RotationA, new Point3D());
+        AddRotation(transformGroup, new Vector3D(0, 1, 0), setup.Part.RotationB, new Point3D());
+        AddRotation(transformGroup, new Vector3D(0, 0, 1), setup.Part.RotationC, new Point3D());
+        return transformGroup.Children.Count == 0
+            ? offset
+            : transformGroup.Transform(offset);
     }
 
     private static void AddRotation(Transform3DGroup transformGroup, Vector3D axis, double angleDegrees, Point3D center)
@@ -737,23 +757,29 @@ public sealed class ThreeAxisToolpathPlanner
 
     public List<OperationToolpath> Plan(MachineProfile machine, CamJob job, IReadOnlyList<ToolDefinition> toolLibrary)
     {
-        _ = machine;
         var lookup = toolLibrary.ToDictionary(tool => tool.Number);
         var operationPlans = new List<OperationToolpath>();
-        RestStockMap? restMap = null;
+        var restMaps = new Dictionary<RestStockFrameKey, RestStockMap>();
 
         foreach (var setup in GetPlanSetups(job))
         {
             var partGeometry = _geometryLoader.TryLoadPartGeometry(setup);
             var previewStockBounds = StockBoundsResolver.GetStockBounds(setup, partGeometry?.Bounds);
             var bounds = StockBoundsResolver.ToToolpathBounds(setup, previewStockBounds);
-            if (restMap is null || !setup.TransferRestFromPreviousSetup || !restMap.CanRepresent(bounds))
+            if (!setup.TransferRestFromPreviousSetup)
             {
-                restMap = new RestStockMap(bounds);
+                restMaps.Clear();
             }
 
             foreach (var operation in setup.Operations.Where(op => op.Enabled))
             {
+                var restFrame = RestStockFrameKey.From(machine, operation);
+                if (!restMaps.TryGetValue(restFrame, out var restMap) || !restMap.CanRepresent(bounds))
+                {
+                    restMap = new RestStockMap(bounds);
+                    restMaps[restFrame] = restMap;
+                }
+
                 if (!lookup.TryGetValue(operation.ToolNumber, out var tool))
                 {
                     operationPlans.Add(new OperationToolpath
@@ -4006,6 +4032,47 @@ public sealed class ThreeAxisToolpathPlanner
 
     private static string FormatValue(double value) => value.ToString("0.###", CultureInfo.InvariantCulture);
 
+    private readonly record struct RestStockFrameKey(double A, double B, double C)
+    {
+        public static RestStockFrameKey From(MachineProfile machine, ToolpathOperationDefinition operation)
+        {
+            if (!SupportsIndexedRotary(machine))
+            {
+                return new RestStockFrameKey(0, 0, 0);
+            }
+
+            return new RestStockFrameKey(
+                NormalizeAngle(operation.RotaryIndexA),
+                NormalizeAngle(operation.RotaryIndexB),
+                NormalizeAngle(operation.RotaryIndexC));
+        }
+
+        private static bool SupportsIndexedRotary(MachineProfile machine)
+        {
+            return machine.Kinematics is KinematicsMode.FourAxisIndexedMill
+                or KinematicsMode.ThreePlusOneMill
+                or KinematicsMode.ThreePlusTwoMill
+                or KinematicsMode.FiveAxisSimultaneousMill;
+        }
+
+        private static double NormalizeAngle(double angle)
+        {
+            while (angle <= -180)
+            {
+                angle += 360;
+            }
+
+            while (angle > 180)
+            {
+                angle -= 360;
+            }
+
+            return Math.Abs(angle) < 0.000001
+                ? 0
+                : Math.Round(angle, 4);
+        }
+    }
+
     private sealed class RestStockMap
     {
         private const int Width = 220;
@@ -4200,7 +4267,7 @@ public sealed class GrblPostProcessor
                 lines.Add(string.Empty);
                 lines.Add(FormatComment($"Setup: {operation.Setup.Name}"));
                 lines.Add(FormatComment($"WCS: {NormalizeWorkOffsetCode(operation.Setup.WorkOffsetCode)} | Origin X{FormatValue(operation.Setup.WorkOrigin.X)} Y{FormatValue(operation.Setup.WorkOrigin.Y)} Z{FormatValue(operation.Setup.WorkOrigin.Z)}"));
-                lines.Add(FormatComment($"Part rotation A{FormatValue(operation.Setup.Part.RotationA)} B{FormatValue(operation.Setup.Part.RotationB)}"));
+                lines.Add(FormatComment($"Model orientation X{FormatValue(operation.Setup.Part.RotationA)} Y{FormatValue(operation.Setup.Part.RotationB)} Z{FormatValue(operation.Setup.Part.RotationC)}"));
                 AddRotaryMappingComment(lines, machine);
                 lines.Add(NormalizeWorkOffsetCode(operation.Setup.WorkOffsetCode));
                 AddIndexedRotaryPosition(lines, machine, operation.Setup);
@@ -4333,7 +4400,7 @@ public sealed class GrblPostProcessor
 
     private static void AddIndexedRotaryPosition(List<string> lines, MachineProfile machine, JobSetup setup, ToolpathOperationDefinition? operation = null)
     {
-        var hasRequestedIndex = HasSetupRotaryIndex(setup) || HasOperationRotaryIndex(operation);
+        var hasRequestedIndex = HasOperationRotaryIndex(operation);
         if (!SupportsIndexedRotary(machine))
         {
             if (hasRequestedIndex)
@@ -4344,12 +4411,12 @@ public sealed class GrblPostProcessor
             return;
         }
 
-        var rotaryWords = BuildRotaryWords(machine, setup.Part, operation);
+        var rotaryWords = BuildRotaryWords(machine, operation);
         if (rotaryWords.Count == 0)
         {
             if (hasRequestedIndex)
             {
-                lines.Add(FormatComment("Setup rotation requested, but no A/B rotary axis is configured on the machine profile."));
+                lines.Add(FormatComment("Operation rotary index requested, but no A/B rotary axis is configured on the machine profile."));
             }
 
             return;
@@ -4377,7 +4444,8 @@ public sealed class GrblPostProcessor
     {
         var mappings = machine.Axes
             .Where(axis => axis.Type == AxisType.Rotary && IsSupportedRotaryAxisName(axis.Name))
-            .Select(axis => $"{NormalizeRotaryAxisName(axis.Name)} around {axis.RotatesAround}")
+            .Select(axis =>
+                $"{NormalizeRotaryAxisName(axis.Name)} around {axis.RotatesAround}, {axis.Mount}, pivot X{FormatValue(axis.PivotOffsetX)} Y{FormatValue(axis.PivotOffsetY)} Z{FormatValue(axis.PivotOffsetZ)}, zero {FormatValue(axis.ZeroOffset)}")
             .ToList();
         if (mappings.Count > 0)
         {
@@ -4385,8 +4453,13 @@ public sealed class GrblPostProcessor
         }
     }
 
-    private static List<string> BuildRotaryWords(MachineProfile machine, PartDefinition part, ToolpathOperationDefinition? operation = null)
+    private static List<string> BuildRotaryWords(MachineProfile machine, ToolpathOperationDefinition? operation = null)
     {
+        if (!HasOperationRotaryIndex(operation))
+        {
+            return new List<string>();
+        }
+
         var words = new List<string>();
         foreach (var axis in machine.Axes.Where(axis => axis.Type == AxisType.Rotary))
         {
@@ -4398,12 +4471,12 @@ public sealed class GrblPostProcessor
 
             var angle = axisName switch
             {
-                "A" => part.RotationA + (operation?.RotaryIndexA ?? 0),
-                "B" => part.RotationB + (operation?.RotaryIndexB ?? 0),
+                "A" => operation?.RotaryIndexA ?? 0,
+                "B" => operation?.RotaryIndexB ?? 0,
                 _ => 0
             };
 
-            words.Add($"{axisName}{FormatValue(angle)}");
+            words.Add($"{axisName}{FormatValue(angle + axis.ZeroOffset)}");
             if (!AllowsMultipleIndexedRotaryAxes(machine))
             {
                 break;
@@ -4424,12 +4497,6 @@ public sealed class GrblPostProcessor
     private static bool AllowsMultipleIndexedRotaryAxes(MachineProfile machine)
     {
         return machine.Kinematics is KinematicsMode.ThreePlusTwoMill or KinematicsMode.FiveAxisSimultaneousMill;
-    }
-
-    private static bool HasSetupRotaryIndex(JobSetup setup)
-    {
-        return Math.Abs(setup.Part.RotationA) > 0.0001
-            || Math.Abs(setup.Part.RotationB) > 0.0001;
     }
 
     private static bool HasOperationRotaryIndex(ToolpathOperationDefinition? operation)
@@ -4625,6 +4692,7 @@ public sealed class StockSimulationEngine
         var height = heights.GetLength(1);
         var cellSizeX = (bounds.MaxX - bounds.MinX) / Math.Max(width - 1, 1);
         var cellSizeY = (bounds.MaxY - bounds.MinY) / Math.Max(height - 1, 1);
+        var rasterRadius = Math.Max(radius, Math.Min(cellSizeX, cellSizeY) * 0.55);
         var segmentLength = Math.Sqrt(Math.Pow(end.X - start.X, 2) + Math.Pow(end.Y - start.Y, 2) + Math.Pow(end.Z - start.Z, 2));
         var steps = Math.Max(1, (int)Math.Ceiling(segmentLength / Math.Max(Math.Min(cellSizeX, cellSizeY), 0.5)));
 
@@ -4635,10 +4703,10 @@ public sealed class StockSimulationEngine
             var sampleY = Lerp(start.Y, end.Y, t);
             var sampleZ = Lerp(start.Z, end.Z, t);
 
-            var minGridX = Math.Max(0, (int)Math.Floor(((sampleX - radius) - bounds.MinX) / cellSizeX));
-            var maxGridX = Math.Min(width - 1, (int)Math.Ceiling(((sampleX + radius) - bounds.MinX) / cellSizeX));
-            var minGridY = Math.Max(0, (int)Math.Floor(((sampleY - radius) - bounds.MinY) / cellSizeY));
-            var maxGridY = Math.Min(height - 1, (int)Math.Ceiling(((sampleY + radius) - bounds.MinY) / cellSizeY));
+            var minGridX = Math.Max(0, (int)Math.Floor(((sampleX - rasterRadius) - bounds.MinX) / cellSizeX));
+            var maxGridX = Math.Min(width - 1, (int)Math.Ceiling(((sampleX + rasterRadius) - bounds.MinX) / cellSizeX));
+            var minGridY = Math.Max(0, (int)Math.Floor(((sampleY - rasterRadius) - bounds.MinY) / cellSizeY));
+            var maxGridY = Math.Min(height - 1, (int)Math.Ceiling(((sampleY + rasterRadius) - bounds.MinY) / cellSizeY));
 
             for (var x = minGridX; x <= maxGridX; x++)
             {
@@ -4649,9 +4717,9 @@ public sealed class StockSimulationEngine
                     var dx = worldX - sampleX;
                     var dy = worldY - sampleY;
                     var radialDistance = Math.Sqrt((dx * dx) + (dy * dy));
-                    if (radialDistance <= radius)
+                    if (radialDistance <= rasterRadius)
                     {
-                        var cutHeight = sampleZ + CutterGeometry.BottomProfileHeightAtRadius(tool, radialDistance);
+                        var cutHeight = sampleZ + CutterGeometry.BottomProfileHeightAtRadius(tool, Math.Min(radialDistance, radius));
                         heights[x, y] = Math.Min(heights[x, y], cutHeight);
                     }
                 }

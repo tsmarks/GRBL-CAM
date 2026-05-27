@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.Runtime.CompilerServices;
 
 namespace GRBL_Cam.Models;
 
@@ -30,6 +31,12 @@ public enum RotaryAxisDirection
 {
     X,
     Y
+}
+
+public enum RotaryAxisMount
+{
+    Table,
+    Head
 }
 
 public enum ToolStyle
@@ -166,21 +173,106 @@ public sealed class MachineProfile
     public string Notes { get; set; } = string.Empty;
 }
 
-public sealed class MachineAxis
+public sealed class MachineAxis : INotifyPropertyChanged
 {
-    public string Name { get; set; } = "X";
+    private string _name = "X";
+    private AxisType _type = AxisType.Linear;
+    private double _travelMin;
+    private double _travelMax = 300;
+    private double _maxFeedRate = 3000;
+    private double _homePosition;
+    private RotaryAxisDirection _rotatesAround = RotaryAxisDirection.X;
+    private RotaryAxisMount _mount = RotaryAxisMount.Table;
+    private double _pivotOffsetX;
+    private double _pivotOffsetY;
+    private double _pivotOffsetZ;
+    private double _zeroOffset;
 
-    public AxisType Type { get; set; } = AxisType.Linear;
+    public event PropertyChangedEventHandler? PropertyChanged;
 
-    public double TravelMin { get; set; }
+    public string Name
+    {
+        get => _name;
+        set => SetField(ref _name, value);
+    }
 
-    public double TravelMax { get; set; } = 300;
+    public AxisType Type
+    {
+        get => _type;
+        set => SetField(ref _type, value);
+    }
 
-    public double MaxFeedRate { get; set; } = 3000;
+    public double TravelMin
+    {
+        get => _travelMin;
+        set => SetField(ref _travelMin, value);
+    }
 
-    public double HomePosition { get; set; }
+    public double TravelMax
+    {
+        get => _travelMax;
+        set => SetField(ref _travelMax, value);
+    }
 
-    public RotaryAxisDirection RotatesAround { get; set; } = RotaryAxisDirection.X;
+    public double MaxFeedRate
+    {
+        get => _maxFeedRate;
+        set => SetField(ref _maxFeedRate, value);
+    }
+
+    public double HomePosition
+    {
+        get => _homePosition;
+        set => SetField(ref _homePosition, value);
+    }
+
+    public RotaryAxisDirection RotatesAround
+    {
+        get => _rotatesAround;
+        set => SetField(ref _rotatesAround, value);
+    }
+
+    public RotaryAxisMount Mount
+    {
+        get => _mount;
+        set => SetField(ref _mount, value);
+    }
+
+    public double PivotOffsetX
+    {
+        get => _pivotOffsetX;
+        set => SetField(ref _pivotOffsetX, value);
+    }
+
+    public double PivotOffsetY
+    {
+        get => _pivotOffsetY;
+        set => SetField(ref _pivotOffsetY, value);
+    }
+
+    public double PivotOffsetZ
+    {
+        get => _pivotOffsetZ;
+        set => SetField(ref _pivotOffsetZ, value);
+    }
+
+    public double ZeroOffset
+    {
+        get => _zeroOffset;
+        set => SetField(ref _zeroOffset, value);
+    }
+
+    private bool SetField<T>(ref T field, T value, [CallerMemberName] string? propertyName = null)
+    {
+        if (EqualityComparer<T>.Default.Equals(field, value))
+        {
+            return false;
+        }
+
+        field = value;
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName ?? string.Empty));
+        return true;
+    }
 }
 
 public sealed class ToolDefinition

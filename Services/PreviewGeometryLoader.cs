@@ -363,12 +363,30 @@ public sealed class PreviewGeometryLoader
 
     private static Vector3D GetTranslation(JobSetup setup, bool isStockGeometry)
     {
+        var stockOffset = GetOrientedStockOffset(setup);
         return isStockGeometry
             ? new Vector3D(
-                setup.WorkOffset.X + setup.AlignmentOffsetX + setup.Stock.OffsetX,
-                setup.WorkOffset.Y + setup.AlignmentOffsetY + setup.Stock.OffsetY,
-                setup.WorkOffset.Z + setup.AlignmentOffsetZ + setup.Stock.OffsetZ)
+                setup.WorkOffset.X + setup.AlignmentOffsetX + stockOffset.X,
+                setup.WorkOffset.Y + setup.AlignmentOffsetY + stockOffset.Y,
+                setup.WorkOffset.Z + setup.AlignmentOffsetZ + stockOffset.Z)
             : new Vector3D(setup.WorkOffset.X + setup.AlignmentOffsetX, setup.WorkOffset.Y + setup.AlignmentOffsetY, setup.WorkOffset.Z + setup.AlignmentOffsetZ);
+    }
+
+    private static Vector3D GetOrientedStockOffset(JobSetup setup)
+    {
+        var offset = new Vector3D(setup.Stock.OffsetX, setup.Stock.OffsetY, setup.Stock.OffsetZ);
+        if (offset.LengthSquared < 0.0000001)
+        {
+            return offset;
+        }
+
+        var transformGroup = new Transform3DGroup();
+        AddRotation(transformGroup, new Vector3D(1, 0, 0), setup.Part.RotationA);
+        AddRotation(transformGroup, new Vector3D(0, 1, 0), setup.Part.RotationB);
+        AddRotation(transformGroup, new Vector3D(0, 0, 1), setup.Part.RotationC);
+        return transformGroup.Children.Count == 0
+            ? offset
+            : transformGroup.Transform(offset);
     }
 
     private static bool IsBinaryStl(Stream stream, BinaryReader reader)
@@ -554,6 +572,7 @@ public sealed class PreviewGeometryLoader
         {
             AddRotation(transformGroup, new Vector3D(1, 0, 0), setup.Part.RotationA);
             AddRotation(transformGroup, new Vector3D(0, 1, 0), setup.Part.RotationB);
+            AddRotation(transformGroup, new Vector3D(0, 0, 1), setup.Part.RotationC);
         }
         else
         {
@@ -563,6 +582,7 @@ public sealed class PreviewGeometryLoader
                 geometry.Bounds.Z + (geometry.Bounds.SizeZ / 2d));
             AddRotation(transformGroup, new Vector3D(1, 0, 0), setup.Stock.RotationA, center);
             AddRotation(transformGroup, new Vector3D(0, 1, 0), setup.Stock.RotationB, center);
+            AddRotation(transformGroup, new Vector3D(0, 0, 1), setup.Stock.RotationC, center);
         }
 
         var translation = GetTranslation(setup, isStockGeometry);

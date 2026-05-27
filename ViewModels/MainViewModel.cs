@@ -39,6 +39,7 @@ public sealed class MainViewModel : ObservableObject
     private JobSetup? _selectedSetup;
     private ToolpathOperationDefinition? _selectedOperation;
     private ToolpathOperationDefinition? _hookedSelectedOperation;
+    private MachineProfile? _hookedSelectedMachineProfile;
     private ObservableCollection<ToolpathOperationDefinition>? _hookedOperations;
     private double _toolpathPlaybackProgress;
     private double _playbackPosition;
@@ -117,6 +118,8 @@ public sealed class MainViewModel : ObservableObject
 
     public Array RotaryAxisDirections => Enum.GetValues(typeof(RotaryAxisDirection));
 
+    public Array RotaryAxisMounts => Enum.GetValues(typeof(RotaryAxisMount));
+
     public Array ToolStyles => Enum.GetValues(typeof(ToolStyle));
 
     public Array OperationTypes => Enum.GetValues(typeof(OperationType));
@@ -138,10 +141,17 @@ public sealed class MainViewModel : ObservableObject
         get => _selectedMachineProfile;
         set
         {
-            if (SetProperty(ref _selectedMachineProfile, value) && value is not null)
+            if (SetProperty(ref _selectedMachineProfile, value))
             {
-                CurrentJob.MachineProfileName = value.Name;
-                OnPropertyChanged(nameof(IndexedRotarySettingsVisibility));
+                if (value is not null)
+                {
+                    CurrentJob.MachineProfileName = value.Name;
+                    NormalizeMachineRotaryAxesForKinematics(value);
+                }
+
+                HookSelectedMachineProfileNotifications(value);
+                ClearUnsupportedRotaryIndexes();
+                NotifyRotaryUiProperties();
                 RefreshProjectSummary();
                 RaiseCommandStates();
             }
@@ -367,9 +377,30 @@ public sealed class MainViewModel : ObservableObject
         OperationType.Parallel3DFinishing,
         OperationType.ScallopFinishing) ? Visibility.Visible : Visibility.Collapsed;
 
-    public Visibility IndexedRotarySettingsVisibility => SelectedMachineProfile is not null && SupportsIndexedRotary(SelectedMachineProfile)
+    public Visibility IndexedRotarySettingsVisibility => SelectedMachineProfile is not null && GetExposedRotaryAxisNames(SelectedMachineProfile).Any()
         ? Visibility.Visible
         : Visibility.Collapsed;
+
+    public Visibility RotaryAIndexVisibility => IsRotaryAxisExposed("A")
+        ? Visibility.Visible
+        : Visibility.Collapsed;
+
+    public Visibility RotaryBIndexVisibility => IsRotaryAxisExposed("B")
+        ? Visibility.Visible
+        : Visibility.Collapsed;
+
+    public string RotaryIndexLabel
+    {
+        get
+        {
+            var axes = GetExposedRotaryAxisNames(SelectedMachineProfile)
+                .Select(FormatRotaryAxisLabel)
+                .ToList();
+            return axes.Count == 0
+                ? "Index"
+                : $"Index {string.Join(" / ", axes)}";
+        }
+    }
 
     public ICommand AddMachineProfileCommand { get; }
 
@@ -491,6 +522,13 @@ public sealed class MainViewModel : ObservableObject
 
     public void NotifyPreviewInputsChanged()
     {
+        if (SelectedMachineProfile is not null)
+        {
+            NormalizeMachineRotaryAxesForKinematics(SelectedMachineProfile);
+        }
+
+        ClearUnsupportedRotaryIndexes();
+        NotifyRotaryUiProperties();
         RefreshPreview();
         RefreshProjectSummary();
     }
@@ -596,8 +634,8 @@ public sealed class MainViewModel : ObservableObject
 
         if (SelectedOperation.Type is OperationType.Drill or OperationType.Boring)
         {
-            if (_previewSceneData.EdgeSelectableModels.TryGetValue(model, out var edgeGeometry)
-                && TryApplyDrillEdgeSelection(edgeGeometry, point))
+            _previewSceneData.EdgeSelectableModels.TryGetValue(model, out var edgeGeometry);
+            if (TryApplyDrillEdgeSelection(edgeGeometry, point))
             {
                 return true;
             }
@@ -625,56 +663,63 @@ public sealed class MainViewModel : ObservableObject
         return true;
     }
 
-    private bool TryApplyDrillEdgeSelection(PreviewEdgeGeometry edgeGeometry, Point3D hitPoint)
+    private bool TryApplyDrillEdgeSelection(PreviewEdgeGeometry? edgeGeometry, Point3D hitPoint)
     {
         if (SelectedOperation is null || _previewSceneData is null)
         {
             return false;
         }
 
-        var allCircles = BuildHorizontalCircleEdges(_previewSceneData.EdgeGeometries);
+        var allCircles = BuildDrillCircleEdges(_previewSceneData.EdgeGeometries, _previewSceneData.PartBounds);
         if (allCircles.Count == 0)
         {
             StatusMessage = SelectedOperation.Type == OperationType.Boring
-                ? "No horizontal circular STEP edges were found for model-aware boring."
-                : "No horizontal circular STEP edges were found for model-aware drilling.";
+                ? "No circular STEP edges were found for model-aware boring."
+                : "No circular STEP edges were found for model-aware drilling.";
             return false;
         }
 
-        if (!TryGetHorizontalCircle(edgeGeometry, GetEdgeTolerance(_previewSceneData.EdgeGeometries), out var selectedCircle))
+        if (edgeGeometry is null
+            || !TryGetDrillCircle(edgeGeometry, GetEdgeTolerance(_previewSceneData.EdgeGeometries), _previewSceneData.PartBounds, out var selectedCircle))
         {
             selectedCircle = allCircles
-                .OrderBy(circle => DistanceSquared3D(hitPoint, circle.Center))
+                .OrderBy(circle => DistanceToDrillCircle(hitPoint, circle))
                 .First();
         }
 
         var matchingCircles = allCircles
             .Where(circle => IsMatchingDrillCircle(selectedCircle, circle))
-            .OrderByDescending(circle => circle.Z)
+            .OrderByDescending(circle => SignedDistanceAlongNormal(selectedCircle, circle.Center))
             .ToList();
-        var topCircle = matchingCircles.FirstOrDefault();
-        if (topCircle.Source is null)
-        {
-            topCircle = selectedCircle;
-        }
-
-        var bottomCircle = matchingCircles
-            .Where(circle => circle.Z < topCircle.Z - Math.Max(topCircle.Radius * 0.02, 0.01))
-            .OrderBy(circle => circle.Z)
+        var entryCircle = selectedCircle;
+        var exitCircle = matchingCircles
+            .Where(circle => DistanceSquared3D(circle.Center, entryCircle.Center) > Math.Pow(Math.Max(entryCircle.Radius * 0.02, 0.01), 2))
+            .Where(circle => SignedDistanceAlongNormal(entryCircle, circle.Center) < -Math.Max(entryCircle.Radius * 0.02, 0.01))
+            .OrderBy(circle => SignedDistanceAlongNormal(selectedCircle, circle.Center))
             .FirstOrDefault();
-        var inferredDepth = bottomCircle.Source is null
+        var drillAxis = ResolveDrillAxis(entryCircle, exitCircle);
+        var entryAxis = entryCircle.Normal.LengthSquared > 0.000001 ? entryCircle.Normal : drillAxis;
+        var rotaryMessage = ApplyDrillRotaryAutoIndex(entryAxis, out var visualDeltaX, out var visualDeltaY);
+        var alignedEntryCenter = TransformByVisualRotaryDelta(entryCircle.Center, visualDeltaX, visualDeltaY);
+        var alignedExitCenter = exitCircle.Source is null
+            ? (Point3D?)null
+            : TransformByVisualRotaryDelta(exitCircle.Center, visualDeltaX, visualDeltaY);
+
+        var inferredDepth = exitCircle.Source is null
             ? SelectedOperation.Feature.Depth
-            : Math.Max(0, topCircle.Z - bottomCircle.Z);
+            : alignedExitCenter.HasValue
+                ? Math.Abs(alignedEntryCenter.Z - alignedExitCenter.Value.Z)
+                : Math.Abs(SignedDistanceAlongNormal(entryCircle, exitCircle.Center));
 
         var feature = SelectedOperation.Feature;
         feature.Shape = FeatureShape.Circle;
         feature.Name = SelectedOperation.Type == OperationType.Boring
-            ? bottomCircle.Source is null ? "Selected Model Bore" : "Model Bore"
-            : bottomCircle.Source is null ? "Selected Model Hole" : "Model Hole";
-        feature.CenterX = topCircle.Center.X - CurrentSetup.WorkOffset.X - CurrentSetup.AlignmentOffsetX;
-        feature.CenterY = topCircle.Center.Y - CurrentSetup.WorkOffset.Y - CurrentSetup.AlignmentOffsetY;
-        feature.StartZ = SnapNearZero(topCircle.Z - _previewSceneData.StockTopZ);
-        feature.Diameter = topCircle.Radius * 2d;
+            ? exitCircle.Source is null ? "Selected Model Bore" : "Model Bore"
+            : exitCircle.Source is null ? "Selected Model Hole" : "Model Hole";
+        feature.CenterX = alignedEntryCenter.X - CurrentSetup.WorkOffset.X - CurrentSetup.AlignmentOffsetX;
+        feature.CenterY = alignedEntryCenter.Y - CurrentSetup.WorkOffset.Y - CurrentSetup.AlignmentOffsetY;
+        feature.StartZ = SnapNearZero(alignedEntryCenter.Z - _previewSceneData.StockTopZ);
+        feature.Diameter = entryCircle.Radius * 2d;
         feature.Depth = inferredDepth;
         feature.Rows = 1;
         feature.Columns = 1;
@@ -682,10 +727,286 @@ public sealed class MainViewModel : ObservableObject
         NotifySelectedFeatureChanged();
         RefreshPreview();
         var operationName = SelectedOperation.Type == OperationType.Boring ? "boring" : "drill";
-        StatusMessage = bottomCircle.Source is null
-            ? $"Centered {operationName} on model circle at X{feature.CenterX:0.###}, Y{feature.CenterY:0.###}. No matching lower edge was found, so depth remains {feature.Depth:0.###}."
-            : $"Centered {operationName} on model hole at X{feature.CenterX:0.###}, Y{feature.CenterY:0.###}. Diameter {feature.Diameter:0.###}, depth {feature.Depth:0.###}.";
+        StatusMessage = exitCircle.Source is null
+            ? $"Centered {operationName} on model circle at X{feature.CenterX:0.###}, Y{feature.CenterY:0.###}. {rotaryMessage} No matching lower edge was found, so depth remains {feature.Depth:0.###}."
+            : $"Centered {operationName} on model hole at X{feature.CenterX:0.###}, Y{feature.CenterY:0.###}. {rotaryMessage} Diameter {feature.Diameter:0.###}, depth {feature.Depth:0.###}.";
         return true;
+    }
+
+    private static Vector3D ResolveDrillAxis(DrillCircleEdge topCircle, DrillCircleEdge bottomCircle)
+    {
+        if (bottomCircle.Source is not null)
+        {
+            var axis = topCircle.Center - bottomCircle.Center;
+            if (axis.LengthSquared > 0.000001)
+            {
+                axis.Normalize();
+                if (Vector3D.DotProduct(axis, topCircle.Normal) < 0)
+                {
+                    axis = -axis;
+                }
+
+                return axis;
+            }
+        }
+
+        return topCircle.Normal;
+    }
+
+    private string ApplyDrillRotaryAutoIndex(Vector3D drillAxis, out double visualDeltaX, out double visualDeltaY)
+    {
+        visualDeltaX = 0;
+        visualDeltaY = 0;
+        if (SelectedOperation is null)
+        {
+            return string.Empty;
+        }
+
+        var normal = drillAxis;
+        if (normal.LengthSquared < 0.000001)
+        {
+            return "No reliable circle normal was available for rotary auto-index.";
+        }
+
+        normal.Normalize();
+        if (Vector3D.DotProduct(normal, new Vector3D(0, 0, 1)) >= 0.999)
+        {
+            return "No rotary index needed.";
+        }
+
+        var machine = SelectedMachineProfile ?? ResolveSelectedMachine();
+        if (machine is null || !SupportsIndexedRotary(machine))
+        {
+            return "No indexed A/B machine is selected, so rotary index was not changed.";
+        }
+
+        if (!TryResolveBestDrillRotaryAlignment(machine, normal, out var alignment))
+        {
+            return "No configured A/B rotary axis can align this circle normal with the spindle.";
+        }
+
+        var previousA = SelectedOperation.RotaryIndexA;
+        var previousB = SelectedOperation.RotaryIndexB;
+        SelectedOperation.RotaryIndexA = NormalizeAngleDegrees(previousA + alignment.DeltaA);
+        SelectedOperation.RotaryIndexB = NormalizeAngleDegrees(previousB + alignment.DeltaB);
+        visualDeltaX = alignment.VisualDeltaX;
+        visualDeltaY = alignment.VisualDeltaY;
+        OnPropertyChanged($"{nameof(SelectedOperation)}.{nameof(ToolpathOperationDefinition.RotaryIndexA)}");
+        OnPropertyChanged($"{nameof(SelectedOperation)}.{nameof(ToolpathOperationDefinition.RotaryIndexB)}");
+
+        return Math.Abs(alignment.DeltaA) < 0.0001 && Math.Abs(alignment.DeltaB) < 0.0001
+            ? "No rotary index needed."
+            : $"Auto-indexed {FormatRotaryTargetDescription(previousA, previousB, SelectedOperation.RotaryIndexA, SelectedOperation.RotaryIndexB)}.";
+    }
+
+    private static string FormatRotaryTargetDescription(double previousA, double previousB, double targetA, double targetB)
+    {
+        var parts = new List<string>();
+        if (Math.Abs(targetA - previousA) > 0.0001)
+        {
+            parts.Add($"A{previousA:0.###}->{targetA:0.###}");
+        }
+
+        if (Math.Abs(targetB - previousB) > 0.0001)
+        {
+            parts.Add($"B{previousB:0.###}->{targetB:0.###}");
+        }
+
+        return parts.Count == 0 ? "A/B unchanged" : string.Join(", ", parts);
+    }
+
+    private static bool TryResolveBestDrillRotaryAlignment(
+        MachineProfile machine,
+        Vector3D normal,
+        out RotaryAlignmentSolution alignment)
+    {
+        alignment = default;
+        var candidates = new List<RotaryAlignmentSolution>();
+        if (TryResolveDrillRotaryAlignment(machine, normal, out var directAlignment))
+        {
+            candidates.Add(directAlignment);
+        }
+
+        if (candidates.Count == 0)
+        {
+            return false;
+        }
+
+        alignment = candidates
+            .OrderBy(candidate => candidate.Residual)
+            .ThenBy(candidate => Math.Abs(candidate.DeltaA) + Math.Abs(candidate.DeltaB))
+            .First();
+        return true;
+    }
+
+    private static bool TryResolveDrillRotaryAlignment(
+        MachineProfile machine,
+        Vector3D normal,
+        out RotaryAlignmentSolution alignment)
+    {
+        alignment = default;
+        var exposedAxes = GetExposedRotaryAxisNames(machine).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var rotaryAxes = machine.Axes
+            .Where(axis => axis.Type == AxisType.Rotary && IsSupportedRotaryAxisName(axis.Name))
+            .Select(axis => new
+            {
+                Axis = axis,
+                Name = NormalizeRotaryAxisName(axis.Name)
+            })
+            .Where(axis => !string.IsNullOrWhiteSpace(axis.Name) && exposedAxes.Contains(axis.Name))
+            .ToList();
+        if (rotaryAxes.Count == 0)
+        {
+            return false;
+        }
+
+        var singleAxisCandidates = rotaryAxes
+            .Select(axis => BuildSingleAxisAlignmentCandidate(axis.Name, axis.Axis.RotatesAround, normal))
+            .OrderBy(candidate => candidate.Residual)
+            .ThenBy(candidate => Math.Abs(candidate.DeltaA) + Math.Abs(candidate.DeltaB))
+            .ToList();
+        var bestSingleAxis = singleAxisCandidates.FirstOrDefault();
+        if (bestSingleAxis.IsValid && bestSingleAxis.Residual <= 0.035)
+        {
+            alignment = bestSingleAxis;
+            return true;
+        }
+
+        if (machine.Kinematics is not (KinematicsMode.ThreePlusTwoMill or KinematicsMode.FiveAxisSimultaneousMill))
+        {
+            return false;
+        }
+
+        var axisForX = rotaryAxes.FirstOrDefault(axis => axis.Axis.RotatesAround == RotaryAxisDirection.X);
+        var axisForY = rotaryAxes.FirstOrDefault(axis => axis.Axis.RotatesAround == RotaryAxisDirection.Y);
+        if (axisForX is null || axisForY is null)
+        {
+            return false;
+        }
+
+        var visualX = NormalizeAngleDegrees(RadiansToDegrees(Math.Atan2(normal.Y, normal.Z)));
+        var afterX = RotateVectorByVisualDelta(normal, visualX, 0);
+        var visualY = NormalizeAngleDegrees(RadiansToDegrees(Math.Atan2(-afterX.X, afterX.Z)));
+        var alignedNormal = RotateVectorByVisualDelta(normal, visualX, visualY);
+        alignedNormal.Normalize();
+        var residual = Math.Sqrt((alignedNormal.X * alignedNormal.X) + (alignedNormal.Y * alignedNormal.Y));
+        if (residual > 0.035 || alignedNormal.Z < 0.9)
+        {
+            return false;
+        }
+
+        var deltaA = 0d;
+        var deltaB = 0d;
+        AssignAxisDelta(axisForX.Name, visualX, ref deltaA, ref deltaB);
+        AssignAxisDelta(axisForY.Name, visualY, ref deltaA, ref deltaB);
+        alignment = new RotaryAlignmentSolution(
+            true,
+            deltaA,
+            deltaB,
+            visualX,
+            visualY,
+            residual,
+            FormatRotaryAlignmentDescription(deltaA, deltaB));
+        return true;
+    }
+
+    private static RotaryAlignmentSolution BuildSingleAxisAlignmentCandidate(string axisName, RotaryAxisDirection direction, Vector3D normal)
+    {
+        var angle = direction == RotaryAxisDirection.Y
+            ? NormalizeAngleDegrees(RadiansToDegrees(Math.Atan2(-normal.X, normal.Z)))
+            : NormalizeAngleDegrees(RadiansToDegrees(Math.Atan2(normal.Y, normal.Z)));
+        var visualX = direction == RotaryAxisDirection.X ? angle : 0;
+        var visualY = direction == RotaryAxisDirection.Y ? angle : 0;
+        var alignedNormal = RotateVectorByVisualDelta(normal, visualX, visualY);
+        if (alignedNormal.LengthSquared > 0.000001)
+        {
+            alignedNormal.Normalize();
+        }
+
+        var residual = Math.Sqrt((alignedNormal.X * alignedNormal.X) + (alignedNormal.Y * alignedNormal.Y));
+        var deltaA = 0d;
+        var deltaB = 0d;
+        AssignAxisDelta(axisName, angle, ref deltaA, ref deltaB);
+        return new RotaryAlignmentSolution(
+            true,
+            deltaA,
+            deltaB,
+            visualX,
+            visualY,
+            residual,
+            FormatRotaryAlignmentDescription(deltaA, deltaB));
+    }
+
+    private static void AssignAxisDelta(string axisName, double angle, ref double deltaA, ref double deltaB)
+    {
+        if (axisName == "A")
+        {
+            deltaA = angle;
+        }
+        else if (axisName == "B")
+        {
+            deltaB = angle;
+        }
+    }
+
+    private static string FormatRotaryAlignmentDescription(double deltaA, double deltaB)
+    {
+        var parts = new List<string>();
+        if (Math.Abs(deltaA) > 0.0001)
+        {
+            parts.Add($"A{deltaA:0.###}");
+        }
+
+        if (Math.Abs(deltaB) > 0.0001)
+        {
+            parts.Add($"B{deltaB:0.###}");
+        }
+
+        return parts.Count == 0 ? "A/B unchanged" : string.Join(", ", parts);
+    }
+
+    private static Point3D TransformByVisualRotaryDelta(Point3D point, double visualDeltaX, double visualDeltaY)
+    {
+        var rotated = RotateVectorByVisualDelta(new Vector3D(point.X, point.Y, point.Z), visualDeltaX, visualDeltaY);
+        return new Point3D(rotated.X, rotated.Y, rotated.Z);
+    }
+
+    private static Vector3D RotateVectorByVisualDelta(Vector3D vector, double visualDeltaX, double visualDeltaY)
+    {
+        var xRadians = DegreesToRadians(visualDeltaX);
+        var xCos = Math.Cos(xRadians);
+        var xSin = Math.Sin(xRadians);
+        var afterX = new Vector3D(
+            vector.X,
+            (vector.Y * xCos) - (vector.Z * xSin),
+            (vector.Y * xSin) + (vector.Z * xCos));
+
+        var yRadians = DegreesToRadians(visualDeltaY);
+        var yCos = Math.Cos(yRadians);
+        var ySin = Math.Sin(yRadians);
+        return new Vector3D(
+            (afterX.X * yCos) + (afterX.Z * ySin),
+            afterX.Y,
+            (-afterX.X * ySin) + (afterX.Z * yCos));
+    }
+
+    private static double DegreesToRadians(double degrees) => degrees * Math.PI / 180d;
+
+    private static double RadiansToDegrees(double radians) => radians * 180d / Math.PI;
+
+    private static double NormalizeAngleDegrees(double angle)
+    {
+        while (angle <= -180)
+        {
+            angle += 360;
+        }
+
+        while (angle > 180)
+        {
+            angle -= 360;
+        }
+
+        return Math.Abs(angle) < 0.000001 ? 0 : angle;
     }
 
     private bool TryApplyBulkRemovalPlaneSelection(Point3D hitPoint)
@@ -935,6 +1256,8 @@ public sealed class MainViewModel : ObservableObject
         OnPropertyChanged($"{nameof(SelectedOperation)}.{nameof(ToolpathOperationDefinition.Feature)}.{nameof(FeatureDefinition.Shape)}");
         OnPropertyChanged($"{nameof(SelectedOperation)}.{nameof(ToolpathOperationDefinition.Feature)}.{nameof(FeatureDefinition.PathPoints)}");
         OnPropertyChanged($"{nameof(SelectedOperation)}.{nameof(ToolpathOperationDefinition.Feature)}.{nameof(FeatureDefinition.KeepoutLoops)}");
+        OnPropertyChanged($"{nameof(SelectedOperation)}.{nameof(ToolpathOperationDefinition.RotaryIndexA)}");
+        OnPropertyChanged($"{nameof(SelectedOperation)}.{nameof(ToolpathOperationDefinition.RotaryIndexB)}");
     }
 
     private static double SnapNearZero(double value)
@@ -1002,25 +1325,182 @@ public sealed class MainViewModel : ObservableObject
             .ToList();
     }
 
-    private static List<DrillCircleEdge> BuildHorizontalCircleEdges(IReadOnlyList<PreviewEdgeGeometry> edges)
+    private List<DrillCircleEdge> BuildDrillCircleEdges(IReadOnlyList<PreviewEdgeGeometry> edges, Rect3D partBounds)
     {
         var tolerance = GetEdgeTolerance(edges);
         var circles = new List<DrillCircleEdge>();
+        var circleKeys = new HashSet<string>();
         foreach (var edge in edges)
         {
-            if (TryGetHorizontalCircle(edge, tolerance, out var circle))
+            if (TryGetDrillCircle(edge, tolerance, partBounds, out var circle))
             {
-                circles.Add(circle);
+                AddUniqueDrillCircle(circles, circleKeys, circle, tolerance);
+            }
+        }
+
+        foreach (var loop in BuildClosedEdgeLoops(edges, tolerance))
+        {
+            if (TryGetDrillCircle(loop, tolerance, partBounds, out var circle))
+            {
+                AddUniqueDrillCircle(circles, circleKeys, circle, tolerance);
             }
         }
 
         return circles;
     }
 
-    private static bool TryGetHorizontalCircle(PreviewEdgeGeometry edge, double tolerance, out DrillCircleEdge circle)
+    private static void AddUniqueDrillCircle(
+        List<DrillCircleEdge> circles,
+        ISet<string> circleKeys,
+        DrillCircleEdge circle,
+        double tolerance)
+    {
+        var keyScale = Math.Max(tolerance * 2d, 0.05);
+        var key = string.Join(
+            ":",
+            RoundForKey(circle.Center.X, keyScale),
+            RoundForKey(circle.Center.Y, keyScale),
+            RoundForKey(circle.Center.Z, keyScale),
+            RoundForKey(circle.Radius, keyScale),
+            RoundForKey(Math.Abs(circle.Normal.X), 0.02),
+            RoundForKey(Math.Abs(circle.Normal.Y), 0.02),
+            RoundForKey(Math.Abs(circle.Normal.Z), 0.02));
+        if (circleKeys.Add(key))
+        {
+            circles.Add(circle);
+        }
+    }
+
+    private static IReadOnlyList<PreviewEdgeGeometry> BuildClosedEdgeLoops(IReadOnlyList<PreviewEdgeGeometry> edges, double tolerance)
+    {
+        var openChains = edges
+            .Select(edge => TrimDuplicateClosingPoint(edge.Points, tolerance))
+            .Where(points => points.Count >= 2)
+            .Where(points => DistanceSquared3D(points[0], points[^1]) > tolerance * tolerance)
+            .Select(points => new EdgeChain(points))
+            .ToList();
+        if (openChains.Count == 0)
+        {
+            return Array.Empty<PreviewEdgeGeometry>();
+        }
+
+        var joinTolerance = Math.Max(tolerance * 2d, 0.04);
+        var joinToleranceSquared = joinTolerance * joinTolerance;
+        var globallyUsed = new bool[openChains.Count];
+        var loops = new List<PreviewEdgeGeometry>();
+
+        for (var startIndex = 0; startIndex < openChains.Count; startIndex++)
+        {
+            if (globallyUsed[startIndex])
+            {
+                continue;
+            }
+
+            var usedThisLoop = new HashSet<int> { startIndex };
+            var loopPoints = new List<Point3D>(openChains[startIndex].Points);
+            while (usedThisLoop.Count < openChains.Count
+                && DistanceSquared3D(loopPoints[0], loopPoints[^1]) > joinToleranceSquared)
+            {
+                var last = loopPoints[^1];
+                var bestIndex = -1;
+                var reverse = false;
+                var bestDistance = double.MaxValue;
+                for (var candidateIndex = 0; candidateIndex < openChains.Count; candidateIndex++)
+                {
+                    if (globallyUsed[candidateIndex] || usedThisLoop.Contains(candidateIndex))
+                    {
+                        continue;
+                    }
+
+                    var candidate = openChains[candidateIndex];
+                    var startDistance = DistanceSquared3D(last, candidate.Points[0]);
+                    if (startDistance < bestDistance)
+                    {
+                        bestDistance = startDistance;
+                        bestIndex = candidateIndex;
+                        reverse = false;
+                    }
+
+                    var endDistance = DistanceSquared3D(last, candidate.Points[^1]);
+                    if (endDistance < bestDistance)
+                    {
+                        bestDistance = endDistance;
+                        bestIndex = candidateIndex;
+                        reverse = true;
+                    }
+                }
+
+                if (bestIndex < 0 || bestDistance > joinToleranceSquared)
+                {
+                    break;
+                }
+
+                usedThisLoop.Add(bestIndex);
+                var pointsToAppend = reverse
+                    ? openChains[bestIndex].Points.AsEnumerable().Reverse().ToList()
+                    : openChains[bestIndex].Points;
+                AppendConnectedPoints(loopPoints, pointsToAppend);
+            }
+
+            if (loopPoints.Count >= 8 && DistanceSquared3D(loopPoints[0], loopPoints[^1]) <= joinToleranceSquared)
+            {
+                loopPoints[^1] = loopPoints[0];
+                loops.Add(new PreviewEdgeGeometry(RemoveConsecutiveDuplicatePoints(loopPoints, tolerance), "stitched STEP circular edge"));
+                foreach (var usedIndex in usedThisLoop)
+                {
+                    globallyUsed[usedIndex] = true;
+                }
+            }
+        }
+
+        return loops;
+    }
+
+    private static IReadOnlyList<Point3D> TrimDuplicateClosingPoint(IReadOnlyList<Point3D> points, double tolerance)
+    {
+        if (points.Count <= 1 || DistanceSquared3D(points[0], points[^1]) > tolerance * tolerance)
+        {
+            return points;
+        }
+
+        return points.Take(points.Count - 1).ToList();
+    }
+
+    private static void AppendConnectedPoints(List<Point3D> target, IReadOnlyList<Point3D> points)
+    {
+        if (points.Count == 0)
+        {
+            return;
+        }
+
+        var startIndex = target.Count > 0 && DistanceSquared3D(target[^1], points[0]) < 0.0000001
+            ? 1
+            : 0;
+        for (var index = startIndex; index < points.Count; index++)
+        {
+            target.Add(points[index]);
+        }
+    }
+
+    private static IReadOnlyList<Point3D> RemoveConsecutiveDuplicatePoints(IReadOnlyList<Point3D> points, double tolerance)
+    {
+        var cleaned = new List<Point3D>(points.Count);
+        var toleranceSquared = tolerance * tolerance * 0.04;
+        foreach (var point in points)
+        {
+            if (cleaned.Count == 0 || DistanceSquared3D(cleaned[^1], point) > toleranceSquared)
+            {
+                cleaned.Add(point);
+            }
+        }
+
+        return cleaned;
+    }
+
+    private static bool TryGetDrillCircle(PreviewEdgeGeometry edge, double tolerance, Rect3D partBounds, out DrillCircleEdge circle)
     {
         circle = default;
-        if (edge.Points.Count < 8 || !IsClosedInXy(edge, tolerance) || !IsMostlyHorizontal(edge, tolerance))
+        if (edge.Points.Count < 8 || !IsClosed3D(edge, tolerance))
         {
             return false;
         }
@@ -1035,16 +1515,43 @@ public sealed class MainViewModel : ObservableObject
             return false;
         }
 
-        var center = new Point3D(
-            (points.Min(point => point.X) + points.Max(point => point.X)) / 2d,
-            (points.Min(point => point.Y) + points.Max(point => point.Y)) / 2d,
-            points.Average(point => point.Z));
+        if (!TryGetLoopNormal(points, out var normal))
+        {
+            return false;
+        }
+
+        var average = AveragePoint(points);
+        OrientNormalOutward(ref normal, average, partBounds);
+        var basisX = GetPerpendicular(normal);
+        var basisY = Vector3D.CrossProduct(normal, basisX);
+        if (basisY.LengthSquared < 0.0000001)
+        {
+            return false;
+        }
+
+        basisY.Normalize();
+        var projected = points
+            .Select(point =>
+            {
+                var vector = point - average;
+                return new Point(
+                    Vector3D.DotProduct(vector, basisX),
+                    Vector3D.DotProduct(vector, basisY));
+            })
+            .ToList();
+        var centerOffsetX = (projected.Min(point => point.X) + projected.Max(point => point.X)) / 2d;
+        var centerOffsetY = (projected.Min(point => point.Y) + projected.Max(point => point.Y)) / 2d;
+        var center = average + (basisX * centerOffsetX) + (basisY * centerOffsetY);
+        var planarSpread = points
+            .Select(point => Math.Abs(Vector3D.DotProduct(point - center, normal)))
+            .DefaultIfEmpty(0)
+            .Max();
         var radii = points
             .Select(point =>
             {
-                var dx = point.X - center.X;
-                var dy = point.Y - center.Y;
-                return Math.Sqrt((dx * dx) + (dy * dy));
+                var radial = point - center;
+                radial -= normal * Vector3D.DotProduct(radial, normal);
+                return radial.Length;
             })
             .ToList();
         var radius = radii.Average();
@@ -1054,12 +1561,13 @@ public sealed class MainViewModel : ObservableObject
         }
 
         var radialSpread = radii.Max() - radii.Min();
-        if (radialSpread > Math.Max(radius * 0.18, tolerance * 4))
+        if (planarSpread > Math.Max(radius * 0.08, tolerance * 4)
+            || radialSpread > Math.Max(radius * 0.20, tolerance * 4))
         {
             return false;
         }
 
-        circle = new DrillCircleEdge(center, radius, center.Z, edge);
+        circle = new DrillCircleEdge(center, radius, normal, edge);
         return true;
     }
 
@@ -1067,10 +1575,27 @@ public sealed class MainViewModel : ObservableObject
     {
         var centerTolerance = Math.Max(selected.Radius * 0.18, 0.08);
         var radiusTolerance = Math.Max(selected.Radius * 0.18, 0.08);
-        var dx = selected.Center.X - candidate.Center.X;
-        var dy = selected.Center.Y - candidate.Center.Y;
-        return (dx * dx) + (dy * dy) <= centerTolerance * centerTolerance
+        var normalDot = Math.Abs(Vector3D.DotProduct(selected.Normal, candidate.Normal));
+        var offset = candidate.Center - selected.Center;
+        var axisDistance = Vector3D.DotProduct(offset, selected.Normal);
+        var radialOffset = offset - (selected.Normal * axisDistance);
+        return normalDot >= 0.94
+            && radialOffset.Length <= centerTolerance
             && Math.Abs(selected.Radius - candidate.Radius) <= radiusTolerance;
+    }
+
+    private static double DistanceToDrillCircle(Point3D point, DrillCircleEdge circle)
+    {
+        var offset = point - circle.Center;
+        var planeDistance = Math.Abs(Vector3D.DotProduct(offset, circle.Normal));
+        var radial = offset - (circle.Normal * Vector3D.DotProduct(offset, circle.Normal));
+        var radialDistance = Math.Abs(radial.Length - circle.Radius);
+        return (planeDistance * planeDistance) + (radialDistance * radialDistance);
+    }
+
+    private static double SignedDistanceAlongNormal(DrillCircleEdge reference, Point3D point)
+    {
+        return Vector3D.DotProduct(point - reference.Center, reference.Normal);
     }
 
     private static bool IsClosedInXy(PreviewEdgeGeometry edge, double tolerance)
@@ -1085,6 +1610,12 @@ public sealed class MainViewModel : ObservableObject
         var dx = last.X - first.X;
         var dy = last.Y - first.Y;
         return (dx * dx) + (dy * dy) <= tolerance * tolerance;
+    }
+
+    private static bool IsClosed3D(PreviewEdgeGeometry edge, double tolerance)
+    {
+        return edge.Points.Count >= 3
+            && DistanceSquared3D(edge.Points[0], edge.Points[^1]) <= tolerance * tolerance;
     }
 
     private static bool IsMostlyHorizontal(PreviewEdgeGeometry edge, double tolerance)
@@ -1120,7 +1651,103 @@ public sealed class MainViewModel : ObservableObject
         return (long)Math.Round(value / scale);
     }
 
-    private readonly record struct DrillCircleEdge(Point3D Center, double Radius, double Z, PreviewEdgeGeometry? Source);
+    private readonly record struct DrillCircleEdge(Point3D Center, double Radius, Vector3D Normal, PreviewEdgeGeometry? Source);
+
+    private readonly record struct EdgeChain(IReadOnlyList<Point3D> Points);
+
+    private readonly record struct RotaryAlignmentSolution(
+        bool IsValid,
+        double DeltaA,
+        double DeltaB,
+        double VisualDeltaX,
+        double VisualDeltaY,
+        double Residual,
+        string Description);
+
+    private static bool TryGetLoopNormal(IReadOnlyList<Point3D> points, out Vector3D normal)
+    {
+        normal = default;
+        for (var index = 0; index < points.Count; index++)
+        {
+            var current = points[index];
+            var next = points[(index + 1) % points.Count];
+            normal.X += (current.Y - next.Y) * (current.Z + next.Z);
+            normal.Y += (current.Z - next.Z) * (current.X + next.X);
+            normal.Z += (current.X - next.X) * (current.Y + next.Y);
+        }
+
+        if (normal.LengthSquared < 0.000001)
+        {
+            var origin = points[0];
+            for (var first = 1; first < points.Count - 1; first++)
+            {
+                for (var second = first + 1; second < points.Count; second++)
+                {
+                    normal = Vector3D.CrossProduct(points[first] - origin, points[second] - origin);
+                    if (normal.LengthSquared >= 0.000001)
+                    {
+                        normal.Normalize();
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        normal.Normalize();
+        return true;
+    }
+
+    private static Point3D AveragePoint(IReadOnlyList<Point3D> points)
+    {
+        return new Point3D(
+            points.Average(point => point.X),
+            points.Average(point => point.Y),
+            points.Average(point => point.Z));
+    }
+
+    private static void OrientNormalOutward(ref Vector3D normal, Point3D center, Rect3D partBounds)
+    {
+        if (!partBounds.IsEmpty)
+        {
+            var partCenter = new Point3D(
+                partBounds.X + (partBounds.SizeX / 2d),
+                partBounds.Y + (partBounds.SizeY / 2d),
+                partBounds.Z + (partBounds.SizeZ / 2d));
+            var outward = center - partCenter;
+            if (outward.LengthSquared > 0.000001)
+            {
+                outward.Normalize();
+                if (Vector3D.DotProduct(normal, outward) < 0)
+                {
+                    normal = -normal;
+                }
+
+                return;
+            }
+        }
+
+        if (normal.Z < 0)
+        {
+            normal = -normal;
+        }
+    }
+
+    private static Vector3D GetPerpendicular(Vector3D normal)
+    {
+        var reference = Math.Abs(Vector3D.DotProduct(normal, new Vector3D(0, 0, 1))) > 0.92
+            ? new Vector3D(1, 0, 0)
+            : new Vector3D(0, 0, 1);
+        var perpendicular = Vector3D.CrossProduct(normal, reference);
+        if (perpendicular.LengthSquared < 0.000001)
+        {
+            perpendicular = new Vector3D(1, 0, 0);
+        }
+
+        perpendicular.Normalize();
+        return perpendicular;
+    }
 
     private static double AverageZ(PreviewEdgeGeometry edge)
     {
@@ -1212,10 +1839,19 @@ public sealed class MainViewModel : ObservableObject
         }
 
         AddOrRepairRotaryAxis(machine, "A", RotaryAxisDirection.X);
-        AddOrRepairRotaryAxis(machine, "B", RotaryAxisDirection.Y);
+        if (AllowsMultipleIndexedRotaryAxes(machine))
+        {
+            AddOrRepairRotaryAxis(machine, "B", RotaryAxisDirection.Y);
+        }
 
-        StatusMessage = $"{machine.Name} is configured for A/B indexed rotary positioning. Use the Around column to swap A and B machine directions.";
+        NormalizeMachineRotaryAxesForKinematics(machine);
+        ClearUnsupportedRotaryIndexes();
+
+        StatusMessage = AllowsMultipleIndexedRotaryAxes(machine)
+            ? $"{machine.Name} is configured for A/B indexed rotary positioning. Use the Around column to swap A and B machine directions."
+            : $"{machine.Name} is configured for single indexed rotary positioning. Use the Around column to choose the X or Y machine direction.";
         OnPropertyChanged(nameof(SelectedMachineProfile));
+        NotifyRotaryUiProperties();
         RefreshProjectSummary();
         ToolpathDiagnostics = BuildToolpathDiagnostics(_previewToolpaths);
         RaiseCommandStates();
@@ -1235,6 +1871,7 @@ public sealed class MainViewModel : ObservableObject
                 TravelMax = 360,
                 MaxFeedRate = 3600,
                 HomePosition = 0,
+                Mount = RotaryAxisMount.Table,
                 RotatesAround = defaultDirection
             });
             return;
@@ -1763,7 +2400,7 @@ public sealed class MainViewModel : ObservableObject
             $"Machine: {(machine is null ? "None" : $"{machine.Name} ({machine.Kinematics})")}{Environment.NewLine}" +
             $"Setups: {Setups.Count} | Active: {CurrentSetup.Name}{Environment.NewLine}" +
             $"Model Source: {modelName}{Environment.NewLine}" +
-            $"Model Rotation: A{CurrentSetup.Part.RotationA:0.###}, B{CurrentSetup.Part.RotationB:0.###}{Environment.NewLine}" +
+            $"Model Orientation: X{CurrentSetup.Part.RotationA:0.###}, Y{CurrentSetup.Part.RotationB:0.###}, Z{CurrentSetup.Part.RotationC:0.###}{Environment.NewLine}" +
             $"Origin: X{CurrentSetup.WorkOrigin.X:0.###}, Y{CurrentSetup.WorkOrigin.Y:0.###}, Z{CurrentSetup.WorkOrigin.Z:0.###} | Axis: X{FormatAxisSign(CurrentSetup.FlipAxisX)} Y{FormatAxisSign(CurrentSetup.FlipAxisY)} Z{FormatAxisSign(CurrentSetup.FlipAxisZ)}{Environment.NewLine}" +
             $"Stock: {stockDescription}{Environment.NewLine}" +
             $"Tools: {ToolLibrary.Count} | Active Setup Ops: {ActiveOperations.Count} | Total Ops: {enabledOperations}/{allOperations} | Generated Moves: {generatedMoves}";
@@ -1959,14 +2596,14 @@ public sealed class MainViewModel : ObservableObject
         List<ToolpathDiagnosticIssue> issues)
     {
         var indexedOperations = setup.Operations.Where(HasOperationRotaryIndex).ToList();
-        if ((!HasSetupRotaryIndex(setup) && indexedOperations.Count == 0) || machine is null)
+        if (indexedOperations.Count == 0 || machine is null)
         {
             return;
         }
 
         if (!SupportsIndexedRotary(machine))
         {
-            issues.Add(new ToolpathDiagnosticIssue("WARN", $"{setup.Name}: setup/operation rotary indexing is preview-only because {machine.Name} is not indexed rotary capable."));
+            issues.Add(new ToolpathDiagnosticIssue("WARN", $"{setup.Name}: operation rotary indexing is preview-only because {machine.Name} is not indexed rotary capable."));
             return;
         }
 
@@ -1986,15 +2623,12 @@ public sealed class MainViewModel : ObservableObject
 
         foreach (var axis in rotaryAxes)
         {
-            var angle = GetSetupRotaryAngle(setup, axis.Name);
-            AddRotaryTravelDiagnostic(setup.Name, axis, angle, issues);
             foreach (var operation in indexedOperations)
             {
-                AddRotaryTravelDiagnostic($"{setup.Name}/{operation.Name}", axis, angle + GetOperationRotaryAngle(operation, axis.Name), issues);
+                AddRotaryTravelDiagnostic($"{setup.Name}/{operation.Name}", axis, GetOperationRotaryAngle(operation, axis.Name), issues);
             }
         }
 
-        WarnForUnpostableSetupRotation(machine, setup, rotaryAxes, issues);
         foreach (var operation in indexedOperations)
         {
             WarnForUnpostableOperationRotation(machine, setup, operation, rotaryAxes, issues);
@@ -2009,41 +2643,6 @@ public sealed class MainViewModel : ObservableObject
             && (angle < Math.Min(axis.TravelMin, axis.TravelMax) - 0.0001 || angle > Math.Max(axis.TravelMin, axis.TravelMax) + 0.0001))
         {
             issues.Add(new ToolpathDiagnosticIssue("WARN", $"{label}: {NormalizeRotaryAxisName(axis.Name)} index {angle:0.###} is outside configured rotary travel {axis.TravelMin:0.###}..{axis.TravelMax:0.###}."));
-        }
-    }
-
-    private static void WarnForUnpostableSetupRotation(
-        MachineProfile machine,
-        JobSetup setup,
-        IReadOnlyList<MachineAxis> rotaryAxes,
-        List<ToolpathDiagnosticIssue> issues)
-    {
-        var configuredAxisNames = rotaryAxes.Select(axis => NormalizeRotaryAxisName(axis.Name)).ToHashSet();
-        if (Math.Abs(setup.Part.RotationA) > 0.0001 && !configuredAxisNames.Contains("A"))
-        {
-            issues.Add(new ToolpathDiagnosticIssue("WARN", $"{setup.Name}: A rotation is set, but no A rotary axis is configured for posting."));
-        }
-
-        if (Math.Abs(setup.Part.RotationB) > 0.0001 && !configuredAxisNames.Contains("B"))
-        {
-            issues.Add(new ToolpathDiagnosticIssue("WARN", $"{setup.Name}: B rotation is set, but no B rotary axis is configured for posting."));
-        }
-
-        if (machine.Kinematics is KinematicsMode.FourAxisIndexedMill or KinematicsMode.ThreePlusOneMill && rotaryAxes.Count > 0)
-        {
-            var postedAxis = NormalizeRotaryAxisName(rotaryAxes[0].Name);
-            var unpostedAngles = new[]
-            {
-                ("A", setup.Part.RotationA),
-                ("B", setup.Part.RotationB)
-            }
-                .Where(axis => axis.Item1 != postedAxis && Math.Abs(axis.Item2) > 0.0001)
-                .Select(axis => $"{axis.Item1}{axis.Item2:0.###}")
-                .ToList();
-            if (unpostedAngles.Count > 0)
-            {
-                issues.Add(new ToolpathDiagnosticIssue("WARN", $"{setup.Name}: {machine.Kinematics} will post only {postedAxis}; unposted setup rotations: {string.Join(", ", unpostedAngles)}."));
-            }
         }
     }
 
@@ -2091,10 +2690,145 @@ public sealed class MainViewModel : ObservableObject
             or KinematicsMode.FiveAxisSimultaneousMill;
     }
 
-    private static bool HasSetupRotaryIndex(JobSetup setup)
+    private static bool AllowsMultipleIndexedRotaryAxes(MachineProfile machine)
     {
-        return Math.Abs(setup.Part.RotationA) > 0.0001
-            || Math.Abs(setup.Part.RotationB) > 0.0001;
+        return machine.Kinematics is KinematicsMode.ThreePlusTwoMill or KinematicsMode.FiveAxisSimultaneousMill;
+    }
+
+    private bool IsRotaryAxisExposed(string axisName)
+    {
+        var normalizedName = NormalizeRotaryAxisName(axisName);
+        return GetExposedRotaryAxisNames(SelectedMachineProfile)
+            .Any(name => string.Equals(name, normalizedName, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private string FormatRotaryAxisLabel(string axisName)
+    {
+        var normalizedName = NormalizeRotaryAxisName(axisName);
+        var axis = SelectedMachineProfile?.Axes.FirstOrDefault(candidate =>
+            candidate.Type == AxisType.Rotary
+            && string.Equals(NormalizeRotaryAxisName(candidate.Name), normalizedName, StringComparison.OrdinalIgnoreCase));
+        return axis is null
+            ? normalizedName
+            : $"{normalizedName} (around {axis.RotatesAround})";
+    }
+
+    private static IEnumerable<string> GetExposedRotaryAxisNames(MachineProfile? machine)
+    {
+        if (machine is null || !SupportsIndexedRotary(machine))
+        {
+            yield break;
+        }
+
+        var configuredNames = machine.Axes
+            .Where(axis => axis.Type == AxisType.Rotary && IsSupportedRotaryAxisName(axis.Name))
+            .Select(axis => NormalizeRotaryAxisName(axis.Name))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        if (configuredNames.Count == 0)
+        {
+            yield break;
+        }
+
+        if (!AllowsMultipleIndexedRotaryAxes(machine))
+        {
+            yield return configuredNames.Contains("A", StringComparer.OrdinalIgnoreCase)
+                ? "A"
+                : configuredNames[0];
+            yield break;
+        }
+
+        if (configuredNames.Contains("A", StringComparer.OrdinalIgnoreCase))
+        {
+            yield return "A";
+        }
+
+        if (configuredNames.Contains("B", StringComparer.OrdinalIgnoreCase))
+        {
+            yield return "B";
+        }
+    }
+
+    private static bool NormalizeMachineRotaryAxesForKinematics(MachineProfile machine)
+    {
+        var changed = false;
+        for (var index = machine.Axes.Count - 1; index >= 0; index--)
+        {
+            var axis = machine.Axes[index];
+            if (axis.Type == AxisType.Rotary && NormalizeRotaryAxisName(axis.Name) == "C")
+            {
+                machine.Axes.RemoveAt(index);
+                changed = true;
+            }
+        }
+
+        if (!SupportsIndexedRotary(machine) || AllowsMultipleIndexedRotaryAxes(machine))
+        {
+            return changed;
+        }
+
+        var configuredNames = machine.Axes
+            .Where(axis => axis.Type == AxisType.Rotary && IsSupportedRotaryAxisName(axis.Name))
+            .Select(axis => NormalizeRotaryAxisName(axis.Name))
+            .ToList();
+        if (configuredNames.Count <= 1)
+        {
+            return changed;
+        }
+
+        var keepName = configuredNames.Contains("A", StringComparer.OrdinalIgnoreCase)
+            ? "A"
+            : configuredNames[0];
+        var keptAxis = false;
+        for (var index = 0; index < machine.Axes.Count; index++)
+        {
+            var axis = machine.Axes[index];
+            if (axis.Type != AxisType.Rotary || !IsSupportedRotaryAxisName(axis.Name))
+            {
+                continue;
+            }
+
+            var axisName = NormalizeRotaryAxisName(axis.Name);
+            if (!keptAxis && string.Equals(axisName, keepName, StringComparison.OrdinalIgnoreCase))
+            {
+                keptAxis = true;
+                continue;
+            }
+
+            machine.Axes.RemoveAt(index);
+            index--;
+            changed = true;
+        }
+
+        return changed;
+    }
+
+    private void ClearUnsupportedRotaryIndexes()
+    {
+        var exposedAxes = GetExposedRotaryAxisNames(SelectedMachineProfile).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var setup in Setups)
+        {
+            if (!exposedAxes.Contains("A"))
+            {
+                foreach (var operation in setup.Operations)
+                {
+                    operation.RotaryIndexA = 0;
+                }
+            }
+
+            if (!exposedAxes.Contains("B"))
+            {
+                foreach (var operation in setup.Operations)
+                {
+                    operation.RotaryIndexB = 0;
+                }
+            }
+
+            foreach (var operation in setup.Operations)
+            {
+                operation.RotaryIndexC = 0;
+            }
+        }
     }
 
     private static bool HasOperationRotaryIndex(ToolpathOperationDefinition? operation)
@@ -2115,16 +2849,6 @@ public sealed class MainViewModel : ObservableObject
         return string.IsNullOrWhiteSpace(axisName)
             ? string.Empty
             : axisName.Trim().Substring(0, 1).ToUpperInvariant();
-    }
-
-    private static double GetSetupRotaryAngle(JobSetup setup, string? axisName)
-    {
-        return NormalizeRotaryAxisName(axisName) switch
-        {
-            "A" => setup.Part.RotationA,
-            "B" => setup.Part.RotationB,
-            _ => 0
-        };
     }
 
     private static double GetOperationRotaryAngle(ToolpathOperationDefinition operation, string? axisName)
@@ -2529,6 +3253,84 @@ public sealed class MainViewModel : ObservableObject
         }
     }
 
+    private void HookSelectedMachineProfileNotifications(MachineProfile? machine)
+    {
+        if (_hookedSelectedMachineProfile is not null)
+        {
+            _hookedSelectedMachineProfile.Axes.CollectionChanged -= OnSelectedMachineAxesChanged;
+            foreach (var axis in _hookedSelectedMachineProfile.Axes)
+            {
+                axis.PropertyChanged -= OnSelectedMachineAxisPropertyChanged;
+            }
+        }
+
+        _hookedSelectedMachineProfile = machine;
+        if (_hookedSelectedMachineProfile is null)
+        {
+            return;
+        }
+
+        _hookedSelectedMachineProfile.Axes.CollectionChanged += OnSelectedMachineAxesChanged;
+        foreach (var axis in _hookedSelectedMachineProfile.Axes)
+        {
+            axis.PropertyChanged += OnSelectedMachineAxisPropertyChanged;
+        }
+    }
+
+    private void OnSelectedMachineAxesChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        if (e.OldItems is not null)
+        {
+            foreach (MachineAxis axis in e.OldItems)
+            {
+                axis.PropertyChanged -= OnSelectedMachineAxisPropertyChanged;
+            }
+        }
+
+        if (e.NewItems is not null)
+        {
+            foreach (MachineAxis axis in e.NewItems)
+            {
+                axis.PropertyChanged += OnSelectedMachineAxisPropertyChanged;
+            }
+        }
+
+        RefreshRotaryAxisConfiguration();
+    }
+
+    private void OnSelectedMachineAxisPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        _ = sender;
+        if (e.PropertyName is nameof(MachineAxis.Name)
+            or nameof(MachineAxis.Type)
+            or nameof(MachineAxis.RotatesAround)
+            or nameof(MachineAxis.Mount)
+            or nameof(MachineAxis.PivotOffsetX)
+            or nameof(MachineAxis.PivotOffsetY)
+            or nameof(MachineAxis.PivotOffsetZ)
+            or nameof(MachineAxis.ZeroOffset))
+        {
+            RefreshRotaryAxisConfiguration();
+        }
+    }
+
+    private void RefreshRotaryAxisConfiguration()
+    {
+        if (SelectedMachineProfile is not null)
+        {
+            NormalizeMachineRotaryAxesForKinematics(SelectedMachineProfile);
+        }
+
+        ClearUnsupportedRotaryIndexes();
+        NotifyRotaryUiProperties();
+        RefreshProjectSummary();
+        ToolpathDiagnostics = BuildToolpathDiagnostics(_previewToolpaths);
+        if (!_suppressPreviewRefresh)
+        {
+            RefreshPreview();
+        }
+    }
+
     private void NotifyOperationSpecificUiProperties()
     {
         OnPropertyChanged(nameof(OperationStepSettingsVisibility));
@@ -2544,7 +3346,15 @@ public sealed class MainViewModel : ObservableObject
         OnPropertyChanged(nameof(DrillSettingsVisibility));
         OnPropertyChanged(nameof(PatternSettingsVisibility));
         OnPropertyChanged(nameof(RotationSettingsVisibility));
+        NotifyRotaryUiProperties();
+    }
+
+    private void NotifyRotaryUiProperties()
+    {
         OnPropertyChanged(nameof(IndexedRotarySettingsVisibility));
+        OnPropertyChanged(nameof(RotaryAIndexVisibility));
+        OnPropertyChanged(nameof(RotaryBIndexVisibility));
+        OnPropertyChanged(nameof(RotaryIndexLabel));
     }
 
     private bool IsSelectedOperationType(params OperationType[] operationTypes)

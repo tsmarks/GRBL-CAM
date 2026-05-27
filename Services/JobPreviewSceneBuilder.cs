@@ -58,17 +58,23 @@ public sealed class JobPreviewSceneBuilder
         toolpaths ??= Array.Empty<OperationToolpath>();
         var setup = job.Setup;
         var previewSetup = BuildIndexedPreviewSetup(setup, selectedOperation, machine);
+        var stockDimensionSetup = setup;
+        var operationRotation = ResolvePreviewRotaryAngles(
+            machine,
+            selectedOperation?.RotaryIndexA ?? 0,
+            selectedOperation?.RotaryIndexB ?? 0);
         var activeToolpaths = toolpaths
             .Where(toolpath => ReferenceEquals(toolpath.Setup, setup) || setup.Operations.Contains(toolpath.Operation))
             .ToList();
         var partGeometry = _geometryLoader.TryLoadPartGeometry(previewSetup);
-        var stockGeometry = previewSetup.Stock.ShowInPreview ? _geometryLoader.TryLoadStockGeometry(previewSetup) : null;
-        var stockPlacement = GetStockPlacement(previewSetup, partGeometry);
+        var stockDimensionGeometry = _geometryLoader.TryLoadPartGeometry(stockDimensionSetup);
+        var stockGeometry = previewSetup.Stock.ShowInPreview ? _geometryLoader.TryLoadStockGeometry(stockDimensionSetup) : null;
+        var stockBounds = GetPreviewStockBounds(stockDimensionSetup, stockDimensionGeometry, stockGeometry, operationRotation);
+        var stockPlacement = new StockPlacement(0, 0, stockBounds.IsEmpty ? setup.WorkOffset.Z : stockBounds.Z + stockBounds.SizeZ);
         var playbackSegments = BuildPlaybackSegments(previewSetup, stockPlacement, activeToolpaths);
         var isPlaybackActive = playback?.IsActive == true && playbackSegments.Count > 0;
         var partBounds = partGeometry?.HasRenderableGeometry == true ? partGeometry.Bounds : GetFallbackPartBounds(previewSetup);
-        var stockBounds = GetPreviewStockBounds(previewSetup, partGeometry, stockGeometry);
-        var bounds = GetSceneBounds(previewSetup, partGeometry, stockGeometry, activeToolpaths);
+        var bounds = GetSceneBounds(previewSetup, partGeometry, stockBounds, activeToolpaths);
         var scene = new Model3DGroup();
         var overlayScene = new Model3DGroup();
         var selectableModels = new Dictionary<Model3D, ToolpathOperationDefinition>();
@@ -90,7 +96,7 @@ public sealed class JobPreviewSceneBuilder
         }
         else
         {
-            AddStock(scene, previewSetup, partGeometry, stockGeometry, originSelectableModels);
+            AddStock(scene, previewSetup, stockDimensionSetup, stockDimensionGeometry, stockGeometry, operationRotation, originSelectableModels);
         }
 
         if (partGeometry?.HasRenderableGeometry != true)
@@ -127,8 +133,7 @@ public sealed class JobPreviewSceneBuilder
     {
         var operationIndexA = selectedOperation?.RotaryIndexA ?? 0;
         var operationIndexB = selectedOperation?.RotaryIndexB ?? 0;
-        var partRotation = ResolvePreviewRotaryAngles(machine, setup.Part.RotationA + operationIndexA, setup.Part.RotationB + operationIndexB);
-        var stockRotation = ResolvePreviewRotaryAngles(machine, setup.Stock.RotationA + operationIndexA, setup.Stock.RotationB + operationIndexB);
+        var operationRotation = ResolvePreviewRotaryAngles(machine, operationIndexA, operationIndexB);
 
         return new JobSetup
         {
@@ -143,9 +148,9 @@ public sealed class JobPreviewSceneBuilder
                 WidthY = setup.Part.WidthY,
                 HeightZ = setup.Part.HeightZ,
                 Diameter = setup.Part.Diameter,
-                RotationA = partRotation.X,
-                RotationB = partRotation.Y,
-                RotationC = 0
+                RotationA = setup.Part.RotationA + operationRotation.X,
+                RotationB = setup.Part.RotationB + operationRotation.Y,
+                RotationC = setup.Part.RotationC
             },
             Stock = new StockDefinition
             {
@@ -159,9 +164,9 @@ public sealed class JobPreviewSceneBuilder
                 OffsetX = setup.Stock.OffsetX,
                 OffsetY = setup.Stock.OffsetY,
                 OffsetZ = setup.Stock.OffsetZ,
-                RotationA = stockRotation.X,
-                RotationB = stockRotation.Y,
-                RotationC = 0,
+                RotationA = setup.Stock.RotationA + operationRotation.X,
+                RotationB = setup.Stock.RotationB + operationRotation.Y,
+                RotationC = setup.Stock.RotationC,
                 RadialAllowance = setup.Stock.RadialAllowance,
                 AxialAllowance = setup.Stock.AxialAllowance
             },
@@ -187,17 +192,68 @@ public sealed class JobPreviewSceneBuilder
     {
         var x = 0d;
         var y = 0d;
-        AddMappedAngle(GetRotaryAxisDirection(machine, "A", RotaryAxisDirection.X), axisA, ref x, ref y);
-        AddMappedAngle(GetRotaryAxisDirection(machine, "B", RotaryAxisDirection.Y), axisB, ref x, ref y);
+        if (machine is null || !SupportsIndexedRotary(machine))
+        {
+            AddMappedAngle(RotaryAxisDirection.X, axisA, ref x, ref y);
+            AddMappedAngle(RotaryAxisDirection.Y, axisB, ref x, ref y);
+            return (x, y);
+        }
+
+        foreach (var axis in GetPreviewRotaryAxes(machine))
+        {
+            var angle = NormalizeRotaryAxisName(axis.Name) == "B" ? axisB : axisA;
+            AddMappedAngle(axis.RotatesAround, angle, ref x, ref y);
+        }
+
         return (x, y);
     }
 
-    private static RotaryAxisDirection GetRotaryAxisDirection(MachineProfile? machine, string axisName, RotaryAxisDirection fallback)
+    private static IEnumerable<MachineAxis> GetPreviewRotaryAxes(MachineProfile machine)
     {
-        var axis = machine?.Axes.FirstOrDefault(candidate =>
-            candidate.Type == AxisType.Rotary
-            && string.Equals(NormalizeRotaryAxisName(candidate.Name), axisName, StringComparison.OrdinalIgnoreCase));
-        return axis?.RotatesAround ?? fallback;
+        var rotaryAxes = machine.Axes
+            .Where(axis => axis.Type == AxisType.Rotary && IsSupportedRotaryAxisName(axis.Name))
+            .ToList();
+        if (rotaryAxes.Count == 0)
+        {
+            yield break;
+        }
+
+        if (!AllowsMultipleIndexedRotaryAxes(machine))
+        {
+            yield return rotaryAxes.FirstOrDefault(axis => NormalizeRotaryAxisName(axis.Name) == "A") ?? rotaryAxes[0];
+            yield break;
+        }
+
+        var axisA = rotaryAxes.FirstOrDefault(axis => NormalizeRotaryAxisName(axis.Name) == "A");
+        if (axisA is not null)
+        {
+            yield return axisA;
+        }
+
+        var axisB = rotaryAxes.FirstOrDefault(axis => NormalizeRotaryAxisName(axis.Name) == "B");
+        if (axisB is not null)
+        {
+            yield return axisB;
+        }
+    }
+
+    private static bool SupportsIndexedRotary(MachineProfile machine)
+    {
+        return machine.Kinematics is KinematicsMode.FourAxisIndexedMill
+            or KinematicsMode.ThreePlusOneMill
+            or KinematicsMode.ThreePlusTwoMill
+            or KinematicsMode.FiveAxisSimultaneousMill;
+    }
+
+    private static bool AllowsMultipleIndexedRotaryAxes(MachineProfile machine)
+    {
+        return machine.Kinematics is KinematicsMode.ThreePlusTwoMill or KinematicsMode.FiveAxisSimultaneousMill;
+    }
+
+    private static bool IsSupportedRotaryAxisName(string? axisName)
+    {
+        var normalized = NormalizeRotaryAxisName(axisName);
+        return normalized is "A" or "B";
     }
 
     private static string NormalizeRotaryAxisName(string? axisName)
@@ -233,28 +289,38 @@ public sealed class JobPreviewSceneBuilder
 
     private static void AddStock(
         Model3DGroup scene,
-        JobSetup setup,
-        LoadedPreviewGeometry? partGeometry,
+        JobSetup visualSetup,
+        JobSetup dimensionSetup,
+        LoadedPreviewGeometry? dimensionPartGeometry,
         LoadedPreviewGeometry? stockGeometry,
+        (double X, double Y) operationRotation,
         IDictionary<Model3D, SetupOriginSource> originSelectableModels)
     {
-        if (!setup.Stock.ShowInPreview)
+        if (!visualSetup.Stock.ShowInPreview)
         {
             return;
         }
 
         if (stockGeometry?.HasRenderableGeometry == true)
         {
+            var operationTransform = BuildOperationPreviewTransform(operationRotation);
+            if (!operationTransform.Value.IsIdentity)
+            {
+                stockGeometry.Model.Transform = CombineTransforms(stockGeometry.Model.Transform, operationTransform);
+            }
+
             scene.Children.Add(stockGeometry.Model);
             RegisterOriginModelTree(stockGeometry.Model, originSelectableModels, SetupOriginSource.Stock);
             return;
         }
 
-        var dimensions = GetPreviewStockDimensions(setup, partGeometry);
-        var placement = GetStockPlacement(setup, partGeometry);
-        var stockTransform = BuildStockSetupTransform(setup, placement, dimensions);
+        var dimensions = GetPreviewStockDimensions(dimensionSetup, dimensionPartGeometry);
+        var placement = GetStockPlacement(dimensionSetup, dimensionPartGeometry);
+        var stockTransform = CombineTransforms(
+            BuildStockSetupTransform(dimensionSetup, placement, dimensions),
+            BuildOperationPreviewTransform(operationRotation));
         var stockColor = Color.FromRgb(207, 178, 132);
-        switch (setup.Stock.Shape)
+        switch (dimensionSetup.Stock.Shape)
         {
             case StockShape.Cylinder:
                 foreach (var outline in CreateCylinderOutlineModels(
@@ -481,6 +547,86 @@ public sealed class JobPreviewSceneBuilder
 
         var stockModel = CreatePlaybackStockModel(setup, stockBounds, playbackSegments, playback);
         scene.Children.Add(stockModel);
+        AddPlaybackCutVolumes(scene, stockBounds, playbackSegments, playback);
+    }
+
+    private static void AddPlaybackCutVolumes(
+        Model3DGroup scene,
+        Rect3D stockBounds,
+        IReadOnlyList<PlaybackSegment> playbackSegments,
+        ToolpathPlaybackSnapshot playback)
+    {
+        var clampedPosition = Math.Clamp(playback.SegmentPosition, 0, playbackSegments.Count);
+        var fullSegmentCount = Math.Min((int)Math.Floor(clampedPosition), playbackSegments.Count);
+        var partialFraction = clampedPosition - fullSegmentCount;
+        var drawnCutCount = 0;
+        const int maxCutVolumes = 450;
+
+        for (var index = 0; index < fullSegmentCount && drawnCutCount < maxCutVolumes; index++)
+        {
+            if (AddPlaybackCutVolume(scene, stockBounds, playbackSegments[index], 1d))
+            {
+                drawnCutCount++;
+            }
+        }
+
+        if (fullSegmentCount < playbackSegments.Count && partialFraction > 0.0001 && drawnCutCount < maxCutVolumes)
+        {
+            AddPlaybackCutVolume(scene, stockBounds, playbackSegments[fullSegmentCount], partialFraction);
+        }
+    }
+
+    private static bool AddPlaybackCutVolume(
+        Model3DGroup scene,
+        Rect3D stockBounds,
+        PlaybackSegment segment,
+        double fraction)
+    {
+        if (!segment.IsCutting)
+        {
+            return false;
+        }
+
+        var clampedFraction = Math.Clamp(fraction, 0, 1);
+        var end = new Point3D(
+            Lerp(segment.Start.X, segment.End.X, clampedFraction),
+            Lerp(segment.Start.Y, segment.End.Y, clampedFraction),
+            Lerp(segment.Start.Z, segment.End.Z, clampedFraction));
+        var radius = Math.Max(segment.Tool.CuttingDiameter, 0.5) / 2d;
+        var visualRadius = Math.Max(radius, Math.Max(stockBounds.SizeX, stockBounds.SizeY) * 0.006);
+        var cutColor = Color.FromRgb(22, 30, 38);
+
+        if (Math.Abs(end.X - segment.Start.X) <= visualRadius * 0.25
+            && Math.Abs(end.Y - segment.Start.Y) <= visualRadius * 0.25)
+        {
+            var bottomZ = Math.Max(stockBounds.Z - 0.01, Math.Min(segment.Start.Z, end.Z));
+            var topZ = Math.Min(stockBounds.Z + stockBounds.SizeZ + 0.02, Math.Max(segment.Start.Z, end.Z));
+            if (topZ <= stockBounds.Z || bottomZ >= stockBounds.Z + stockBounds.SizeZ)
+            {
+                return false;
+            }
+
+            scene.Children.Add(CreateCylinderModel(
+                end.X,
+                end.Y,
+                bottomZ,
+                topZ,
+                visualRadius,
+                cutColor,
+                0.96,
+                36));
+            return true;
+        }
+
+        var clippedStart = new Point3D(segment.Start.X, segment.Start.Y, Math.Clamp(segment.Start.Z, stockBounds.Z, stockBounds.Z + stockBounds.SizeZ));
+        var clippedEnd = new Point3D(end.X, end.Y, Math.Clamp(end.Z, stockBounds.Z, stockBounds.Z + stockBounds.SizeZ));
+        if ((clippedEnd - clippedStart).LengthSquared < 0.000001)
+        {
+            return false;
+        }
+
+        scene.Children.Add(CreateSegmentModel(clippedStart, clippedEnd, visualRadius * 1.8, cutColor, 0.9));
+        return true;
     }
 
     private static GeometryModel3D CreatePlaybackStockModel(
@@ -489,8 +635,8 @@ public sealed class JobPreviewSceneBuilder
         IReadOnlyList<PlaybackSegment> playbackSegments,
         ToolpathPlaybackSnapshot playback)
     {
-        const int maxGrid = 62;
-        const int minGrid = 22;
+        const int maxGrid = 120;
+        const int minGrid = 36;
         var longest = Math.Max(stockBounds.SizeX, stockBounds.SizeY);
         var xCount = Math.Clamp((int)Math.Round((stockBounds.SizeX / longest) * maxGrid), minGrid, maxGrid);
         var yCount = Math.Clamp((int)Math.Round((stockBounds.SizeY / longest) * maxGrid), minGrid, maxGrid);
@@ -558,6 +704,7 @@ public sealed class JobPreviewSceneBuilder
         var stepX = stockBounds.SizeX / Math.Max(xCount - 1, 1);
         var stepY = stockBounds.SizeY / Math.Max(yCount - 1, 1);
         var toolRadius = Math.Max(segment.Tool.CuttingDiameter, 0.5) / 2d;
+        var visualRadius = Math.Max(toolRadius, cellSize * 0.8);
         var segmentVector = segment.End - segment.Start;
         var segmentLength = segmentVector.Length * Math.Clamp(fraction, 0, 1);
         var samples = Math.Max(1, (int)Math.Ceiling(segmentLength / Math.Max(cellSize * 0.55, 0.4)));
@@ -568,10 +715,10 @@ public sealed class JobPreviewSceneBuilder
             var x = Lerp(segment.Start.X, segment.End.X, t);
             var y = Lerp(segment.Start.Y, segment.End.Y, t);
             var z = Lerp(segment.Start.Z, segment.End.Z, t);
-            var minGridX = Math.Max(0, (int)Math.Floor(((x - toolRadius) - stockBounds.X) / stepX));
-            var maxGridX = Math.Min(xCount - 1, (int)Math.Ceiling(((x + toolRadius) - stockBounds.X) / stepX));
-            var minGridY = Math.Max(0, (int)Math.Floor(((y - toolRadius) - stockBounds.Y) / stepY));
-            var maxGridY = Math.Min(yCount - 1, (int)Math.Ceiling(((y + toolRadius) - stockBounds.Y) / stepY));
+            var minGridX = Math.Max(0, (int)Math.Floor(((x - visualRadius) - stockBounds.X) / stepX));
+            var maxGridX = Math.Min(xCount - 1, (int)Math.Ceiling(((x + visualRadius) - stockBounds.X) / stepX));
+            var minGridY = Math.Max(0, (int)Math.Floor(((y - visualRadius) - stockBounds.Y) / stepY));
+            var maxGridY = Math.Min(yCount - 1, (int)Math.Ceiling(((y + visualRadius) - stockBounds.Y) / stepY));
 
             for (var gridX = minGridX; gridX <= maxGridX; gridX++)
             {
@@ -586,9 +733,11 @@ public sealed class JobPreviewSceneBuilder
                     var worldY = stockBounds.Y + (gridY * stepY);
                     var dx = worldX - x;
                     var dy = worldY - y;
-                    if ((dx * dx) + (dy * dy) <= toolRadius * toolRadius)
+                    if ((dx * dx) + (dy * dy) <= visualRadius * visualRadius)
                     {
-                        heights[gridX, gridY] = Math.Min(heights[gridX, gridY], Math.Max(stockBounds.Z, z));
+                        var radialDistance = Math.Min(Math.Sqrt((dx * dx) + (dy * dy)), toolRadius);
+                        var cutHeight = z + CutterGeometry.BottomProfileHeightAtRadius(segment.Tool, radialDistance);
+                        heights[gridX, gridY] = Math.Min(heights[gridX, gridY], Math.Max(stockBounds.Z, cutHeight));
                     }
                 }
             }
@@ -660,8 +809,8 @@ public sealed class JobPreviewSceneBuilder
 
     private static GeometryModel3D CreatePlaybackCylinderStockMesh(Rect3D stockBounds, double[,] heights, Color color)
     {
-        const int segments = 96;
-        const int radialSteps = 34;
+        const int segments = 160;
+        const int radialSteps = 72;
         var mesh = new MeshGeometry3D();
         var centerX = stockBounds.X + (stockBounds.SizeX / 2d);
         var centerY = stockBounds.Y + (stockBounds.SizeY / 2d);
@@ -1244,39 +1393,29 @@ public sealed class JobPreviewSceneBuilder
     private static Rect3D GetSceneBounds(
         JobSetup setup,
         LoadedPreviewGeometry? partGeometry,
-        LoadedPreviewGeometry? stockGeometry,
+        Rect3D stockBounds,
         IReadOnlyList<OperationToolpath> toolpaths)
     {
-        var placement = GetStockPlacement(setup, partGeometry);
-        var stockDimensions = GetPreviewStockDimensions(setup, partGeometry);
-        var stockLength = setup.Stock.Shape == StockShape.Cylinder ? stockDimensions.Diameter : stockDimensions.Length;
-        var stockWidth = setup.Stock.Shape == StockShape.Cylinder ? stockDimensions.Diameter : stockDimensions.Width;
-        var topZ = placement.TopZ;
+        var topZ = stockBounds.IsEmpty ? setup.WorkOffset.Z : stockBounds.Z + stockBounds.SizeZ;
+        var stockPlacement = new StockPlacement(0, 0, topZ);
         var deepestFeatureZ = setup.Operations.Count == 0
-            ? topZ - stockDimensions.Height
+            ? stockBounds.IsEmpty ? topZ - 4 : stockBounds.Z
             : setup.Operations.Min(operation => (setup.WorkOffset.Z + operation.Feature.StartZ) - Math.Max(operation.Feature.Depth, 0.35));
-        var bottomZ = Math.Min(topZ - Math.Max(stockDimensions.Height, 4), deepestFeatureZ);
 
         var bounds = Rect3D.Empty;
-        if (setup.Stock.ShowInPreview)
+        if (setup.Stock.ShowInPreview && !stockBounds.IsEmpty)
         {
-            bounds = new Rect3D(
-                placement.CenterX - (stockLength / 2d),
-                placement.CenterY - (stockWidth / 2d),
-                bottomZ,
-                Math.Max(stockLength, 10),
-                Math.Max(stockWidth, 10),
-                Math.Max(topZ - bottomZ, 10));
+            bounds = stockBounds;
+            if (deepestFeatureZ < bounds.Z)
+            {
+                var depthDelta = bounds.Z - deepestFeatureZ;
+                bounds = new Rect3D(bounds.X, bounds.Y, deepestFeatureZ, bounds.SizeX, bounds.SizeY, bounds.SizeZ + depthDelta);
+            }
         }
 
         if (partGeometry?.HasRenderableGeometry == true)
         {
             bounds = bounds.IsEmpty ? partGeometry.Bounds : Union(bounds, partGeometry.Bounds);
-        }
-
-        if (stockGeometry?.HasRenderableGeometry == true)
-        {
-            bounds = bounds.IsEmpty ? stockGeometry.Bounds : Union(bounds, stockGeometry.Bounds);
         }
 
         var originPoint = new Point3D(setup.WorkOrigin.X, setup.WorkOrigin.Y, setup.WorkOrigin.Z);
@@ -1287,7 +1426,7 @@ public sealed class JobPreviewSceneBuilder
         {
             foreach (var move in toolpath.Moves)
             {
-                var previewPoint = ToPreviewPoint(setup, placement, move);
+                var previewPoint = ToPreviewPoint(setup, stockPlacement, move);
                 var moveBounds = new Rect3D(previewPoint.X, previewPoint.Y, previewPoint.Z, 0.1, 0.1, 0.1);
                 bounds = bounds.IsEmpty ? moveBounds : Union(bounds, moveBounds);
             }
@@ -1302,19 +1441,23 @@ public sealed class JobPreviewSceneBuilder
     }
 
     private static Rect3D GetPreviewStockBounds(
-        JobSetup setup,
-        LoadedPreviewGeometry? partGeometry,
-        LoadedPreviewGeometry? stockGeometry)
+        JobSetup dimensionSetup,
+        LoadedPreviewGeometry? dimensionPartGeometry,
+        LoadedPreviewGeometry? stockGeometry,
+        (double X, double Y) operationRotation)
     {
+        var operationTransform = BuildOperationPreviewTransform(operationRotation);
         if (stockGeometry?.HasRenderableGeometry == true)
         {
-            return stockGeometry.Bounds;
+            return operationTransform.Value.IsIdentity
+                ? stockGeometry.Bounds
+                : operationTransform.TransformBounds(stockGeometry.Bounds);
         }
 
-        var placement = GetStockPlacement(setup, partGeometry);
-        var dimensions = GetPreviewStockDimensions(setup, partGeometry);
-        var stockLength = setup.Stock.Shape == StockShape.Cylinder ? dimensions.Diameter : dimensions.Length;
-        var stockWidth = setup.Stock.Shape == StockShape.Cylinder ? dimensions.Diameter : dimensions.Width;
+        var placement = GetStockPlacement(dimensionSetup, dimensionPartGeometry);
+        var dimensions = GetPreviewStockDimensions(dimensionSetup, dimensionPartGeometry);
+        var stockLength = dimensionSetup.Stock.Shape == StockShape.Cylinder ? dimensions.Diameter : dimensions.Length;
+        var stockWidth = dimensionSetup.Stock.Shape == StockShape.Cylinder ? dimensions.Diameter : dimensions.Width;
         var bounds = new Rect3D(
             placement.CenterX - (stockLength / 2d),
             placement.CenterY - (stockWidth / 2d),
@@ -1322,7 +1465,9 @@ public sealed class JobPreviewSceneBuilder
             Math.Max(stockLength, 0.1),
             Math.Max(stockWidth, 0.1),
             Math.Max(dimensions.Height, 0.1));
-        var stockTransform = BuildStockSetupTransform(setup, placement, dimensions);
+        var stockTransform = CombineTransforms(
+            BuildStockSetupTransform(dimensionSetup, placement, dimensions),
+            operationTransform);
         return stockTransform.Value.IsIdentity ? bounds : stockTransform.TransformBounds(bounds);
     }
 
@@ -1348,7 +1493,7 @@ public sealed class JobPreviewSceneBuilder
             ? "stock hidden"
             : stockGeometry?.HasRenderableGeometry == true ? stockGeometry.Description : "stock envelope";
         var stockOffsetText = setup.Stock.ShowInPreview
-            ? $" Stock offset: X{setup.Stock.OffsetX:0.###}, Y{setup.Stock.OffsetY:0.###}, Z{setup.Stock.OffsetZ:0.###}. Stock visual rotation: X{setup.Stock.RotationA:0.###}, Y{setup.Stock.RotationB:0.###}."
+            ? $" Stock offset: X{setup.Stock.OffsetX:0.###}, Y{setup.Stock.OffsetY:0.###}, Z{setup.Stock.OffsetZ:0.###}. Stock visual rotation: X{setup.Stock.RotationA:0.###}, Y{setup.Stock.RotationB:0.###}, Z{setup.Stock.RotationC:0.###}."
             : string.Empty;
         var setupText = job.Setups.Count > 1 ? $" Active setup: {setup.Name}." : string.Empty;
         var operationEnvelopeText = selectedOperation is null
@@ -1401,19 +1546,37 @@ public sealed class JobPreviewSceneBuilder
 
     private static StockPlacement GetStockPlacement(JobSetup setup, LoadedPreviewGeometry? partGeometry)
     {
+        var offset = GetOrientedStockOffset(setup);
         if (partGeometry?.HasRenderableGeometry == true)
         {
             return new StockPlacement(
-                partGeometry.Bounds.X + (partGeometry.Bounds.SizeX / 2d) + setup.Stock.OffsetX,
-                partGeometry.Bounds.Y + (partGeometry.Bounds.SizeY / 2d) + setup.Stock.OffsetY,
-                partGeometry.Bounds.Z + partGeometry.Bounds.SizeZ + setup.Stock.OffsetZ);
+                partGeometry.Bounds.X + (partGeometry.Bounds.SizeX / 2d) + offset.X,
+                partGeometry.Bounds.Y + (partGeometry.Bounds.SizeY / 2d) + offset.Y,
+                partGeometry.Bounds.Z + partGeometry.Bounds.SizeZ + offset.Z);
         }
 
         var fallbackBounds = GetFallbackPartBounds(setup);
         return new StockPlacement(
-            fallbackBounds.X + (fallbackBounds.SizeX / 2d) + setup.Stock.OffsetX,
-            fallbackBounds.Y + (fallbackBounds.SizeY / 2d) + setup.Stock.OffsetY,
-            fallbackBounds.Z + fallbackBounds.SizeZ + setup.Stock.OffsetZ);
+            fallbackBounds.X + (fallbackBounds.SizeX / 2d) + offset.X,
+            fallbackBounds.Y + (fallbackBounds.SizeY / 2d) + offset.Y,
+            fallbackBounds.Z + fallbackBounds.SizeZ + offset.Z);
+    }
+
+    private static Vector3D GetOrientedStockOffset(JobSetup setup)
+    {
+        var offset = new Vector3D(setup.Stock.OffsetX, setup.Stock.OffsetY, setup.Stock.OffsetZ);
+        if (offset.LengthSquared < 0.0000001)
+        {
+            return offset;
+        }
+
+        var transformGroup = new Transform3DGroup();
+        AddRotation(transformGroup, new Vector3D(1, 0, 0), setup.Part.RotationA);
+        AddRotation(transformGroup, new Vector3D(0, 1, 0), setup.Part.RotationB);
+        AddRotation(transformGroup, new Vector3D(0, 0, 1), setup.Part.RotationC);
+        return transformGroup.Children.Count == 0
+            ? offset
+            : transformGroup.Transform(offset);
     }
 
     private static PartReferenceDimensions GetPartReferenceDimensions(JobSetup setup, LoadedPreviewGeometry? partGeometry)
@@ -1466,6 +1629,7 @@ public sealed class JobPreviewSceneBuilder
         var transformGroup = new Transform3DGroup();
         AddRotation(transformGroup, new Vector3D(1, 0, 0), setup.Part.RotationA);
         AddRotation(transformGroup, new Vector3D(0, 1, 0), setup.Part.RotationB);
+        AddRotation(transformGroup, new Vector3D(0, 0, 1), setup.Part.RotationC);
 
         var translation = new Vector3D(
             setup.WorkOffset.X + setup.AlignmentOffsetX,
@@ -1493,6 +1657,7 @@ public sealed class JobPreviewSceneBuilder
             placement.TopZ - (dimensions.Height / 2d));
         AddRotation(transformGroup, new Vector3D(1, 0, 0), setup.Stock.RotationA, center);
         AddRotation(transformGroup, new Vector3D(0, 1, 0), setup.Stock.RotationB, center);
+        AddRotation(transformGroup, new Vector3D(0, 0, 1), setup.Stock.RotationC, center);
 
         return transformGroup.Children.Count switch
         {
@@ -1500,6 +1665,48 @@ public sealed class JobPreviewSceneBuilder
             1 => transformGroup.Children[0],
             _ => transformGroup
         };
+    }
+
+    private static Transform3D BuildOperationPreviewTransform((double X, double Y) operationRotation)
+    {
+        var transformGroup = new Transform3DGroup();
+        AddRotation(transformGroup, new Vector3D(1, 0, 0), operationRotation.X);
+        AddRotation(transformGroup, new Vector3D(0, 1, 0), operationRotation.Y);
+
+        return transformGroup.Children.Count switch
+        {
+            0 => Transform3D.Identity,
+            1 => transformGroup.Children[0],
+            _ => transformGroup
+        };
+    }
+
+    private static Transform3D CombineTransforms(Transform3D? first, Transform3D second)
+    {
+        if (first is null || first.Value.IsIdentity)
+        {
+            return second;
+        }
+
+        if (second.Value.IsIdentity)
+        {
+            return first;
+        }
+
+        var transformGroup = new Transform3DGroup();
+        transformGroup.Children.Add(first);
+        transformGroup.Children.Add(second);
+        return transformGroup;
+    }
+
+    private static void ApplyModelTransform(Model3D model, Transform3D transform)
+    {
+        if (transform.Value.IsIdentity)
+        {
+            return;
+        }
+
+        model.Transform = CombineTransforms(model.Transform, transform);
     }
 
     private static void AddRotation(Transform3DGroup transformGroup, Vector3D axis, double angleDegrees)
